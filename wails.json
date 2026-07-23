@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "share2us-gui",
+  "outputfilename": "share2us-gui",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Moki",
+    "email": "moki@hassankhurram.com"
+  },
+  "info": {
+    "companyName": "Share2.us",
+    "productName": "Share2Us",
+    "productVersion": "1.0.0",
+    "copyright": "Share2.us",
+    "comments": "Share files from your file manager"
+  }
+}

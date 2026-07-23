@@ -1,0 +1,219 @@
+name: release
+
+# On every push to main, build the GUI for each desktop platform with `wails
+# build` (embeds the app icon, Windows manifest, and publisher metadata), and
+# publish a GitHub Release with per-OS archives + a Windows installer.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "frontend/**"
+      - "build/**"
+      - "wails.json"
+      - "installer/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  WAILS_VERSION: v2.13.0
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      v: ${{ steps.v.outputs.v }}
+    steps:
+      - id: v
+        run: echo "v=$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_OUTPUT"
+
+  # Portable per-platform builds. fail-fast:false so one flaky arch (e.g. a
+  # linux-arm64 runner) never blocks the rest of the release.
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: win-amd64,   os: ubuntu-22.04,     platform: windows/amd64,    ext: zip }
+          - { id: win-arm64,   os: ubuntu-22.04,     platform: windows/arm64,    ext: zip }
+          - { id: linux-amd64, os: ubuntu-22.04,     platform: linux/amd64,      ext: tar.gz, webkit: "4.0" }
+          - { id: linux-arm64, os: ubuntu-24.04-arm, platform: linux/arm64,      ext: tar.gz, webkit: "4.1", tags: webkit2_41 }
+          - { id: darwin,      os: macos-latest,     platform: darwin/universal, ext: zip, app: true }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25", check-latest: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Install wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+      - name: Linux WebView deps
+        if: startsWith(matrix.platform, 'linux')
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev "libwebkit2gtk-${{ matrix.webkit }}-dev" libayatana-appindicator3-dev
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: wails build
+        run: |
+          set -euo pipefail
+          TAGS="${{ matrix.tags }}"
+          "$(go env GOPATH)/bin/wails" build -platform "${{ matrix.platform }}" -s -skipbindings \
+            ${TAGS:+-tags "$TAGS"} \
+            -ldflags "-X main.buildVersion=${{ needs.version.outputs.v }}"
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          p="${{ matrix.platform }}"; os="${p%/*}"; arch="${p#*/}"
+          if command -v sha256sum >/dev/null; then SHA="sha256sum"; else SHA="shasum -a 256"; fi
+          if [ "${{ matrix.app }}" = "true" ]; then
+            name="share2us-gui_darwin_universal.zip"
+            ( cd build/bin && zip -q -r -X "$GITHUB_WORKSPACE/dist/$name" share2us-gui.app )
+          elif [ "$os" = windows ]; then
+            name="share2us-gui_${os}_${arch}.zip"
+            ( cd build/bin && zip -q -X "$GITHUB_WORKSPACE/dist/$name" share2us-gui.exe )
+          else
+            name="share2us-gui_${os}_${arch}.tar.gz"
+            tar -C build/bin -czf "dist/$name" share2us-gui
+          fi
+          ( cd dist && cksum "$name" > "$name.crc32" && $SHA "$name" | awk '{print $1}' > "$name.sha256" )
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.id }}
+          path: dist/*
+
+  # Double-click Windows installer (Inno Setup): GUI (wails-built, with icon) +
+  # the latest s2u CLI, so setup can install GUI, CLI, or both.
+  installer:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.25", check-latest: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Install wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: wails build + fetch CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$(go env GOPATH)/bin/wails" build -platform windows/amd64 -s -skipbindings \
+            -ldflags "-X main.buildVersion=${{ needs.version.outputs.v }}"
+          mkdir -p dist
+          cp build/bin/share2us-gui.exe dist/
+          if curl -fsSL -o cli.zip https://github.com/share2us/cli/releases/latest/download/share2us_windows_amd64.zip; then
+            unzip -o cli.zip -d dist && mv -f dist/share2us.exe dist/s2u.exe
+          else
+            echo "CLI release unavailable; installer will ship GUI-only"
+          fi
+          ls -la dist
+      - name: Sign binaries + build & sign MSIX (one self-signed cert)
+        shell: pwsh
+        run: |
+          # ONE self-signed cert signs the exe, the s2u CLI, the MSIX and (later)
+          # Setup.exe. Its Subject MUST equal the MSIX manifest Publisher exactly
+          # (CN=Share2.us, O=Share2.us). The installer trusts this cert into the
+          # LocalMachine stores, so Windows then shows publisher "Share2.us"
+          # instead of "unknown". Basic Constraints (end-entity) keeps MSIX happy.
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+            -Subject "CN=Share2.us, O=Share2.us" `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -KeyUsage DigitalSignature -HashAlgorithm SHA256 `
+            -TextExtension @("2.5.29.19={text}") `
+            -NotAfter (Get-Date).AddYears(5)
+          "SIGN_THUMB=$($cert.Thumbprint)" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+          $sdk = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64" |
+            Sort-Object FullName | Select-Object -Last 1).FullName
+          $signtool = Join-Path $sdk 'signtool.exe'
+          "SIGNTOOL=$signtool" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+
+          # 1) Sign the app + CLI binaries in dist\.
+          foreach ($f in @('dist\share2us-gui.exe','dist\s2u.exe')) {
+            if (Test-Path $f) {
+              & $signtool sign /sha1 $cert.Thumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $f
+            }
+          }
+
+          # 2) Build the MSIX from the (already-built) app + assets.
+          $stage = "msix-stage"
+          New-Item -ItemType Directory -Force -Path "$stage\Assets" | Out-Null
+          Copy-Item build\bin\share2us-gui.exe $stage\
+          Copy-Item installer\msix\Assets\* $stage\Assets\
+          # MSIX Version must be 4-part numeric; use the CI run number.
+          $ver = "1.0.${{ github.run_number }}.0"
+          (Get-Content installer\msix\AppxManifest.xml) -replace 'Version="1.0.0.0"', "Version=`"$ver`"" | Set-Content "$stage\AppxManifest.xml"
+          $msix = "dist\Share2Us-${{ needs.version.outputs.v }}.msix"
+          & "$sdk\makeappx.exe" pack /d $stage /p $msix /o
+          & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint /tr http://timestamp.digicert.com /td SHA256 $msix
+
+          # 3) Export the cert into dist\ so Inno bundles it (the .iss globs
+          #    dist\*.msix + dist\*.cer for the Share-sheet task).
+          Export-Certificate -Cert $cert -FilePath dist\Share2Us-Cert.cer | Out-Null
+          Get-ChildItem dist
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $dist = Join-Path (Get-Location) 'dist'
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "/DDistDir=$dist" "/DAppVersion=${{ needs.version.outputs.v }}" `
+            installer\windows\share2us.iss
+      - name: Sign installer (same self-signed cert)
+        shell: pwsh
+        run: |
+          Get-ChildItem installer\windows\Output\*.exe | ForEach-Object {
+            & $env:SIGNTOOL sign /sha1 $env:SIGN_THUMB /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
+          }
+          # Stage the standalone MSIX + cert next to Setup.exe so the artifact is a
+          # single flat folder (one common root -> upload/download stays flat, and
+          # the publish glob only ever sees files, never subdirectories).
+          Copy-Item dist\*.msix installer\windows\Output\
+          Copy-Item dist\Share2Us-Cert.cer installer\windows\Output\
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-installer
+          # Setup.exe bundles the MSIX + cert; the standalone .msix + .cer are also
+          # published for direct sideload / manual trust.
+          path: installer/windows/Output/*
+
+  # Publish whatever built (tolerant of a failed matrix leg).
+  publish:
+    needs: [version, build, installer]
+    if: ${{ always() && needs.version.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: staging, pattern: "pkg-*", merge-multiple: true }
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.v }}
+        run: |
+          set -euo pipefail
+          ls -laR staging
+          # Pass files only (never a directory) so nested artifact layouts can't
+          # break the release upload.
+          mapfile -t assets < <(find staging -type f | sort)
+          gh release create "v${VERSION}" "${assets[@]}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Share2Us GUI ${VERSION}" \
+            --notes "Automated build from ${GITHUB_SHA}. Windows: **Share2Us-Setup-${VERSION}.exe**, or \`irm https://raw.githubusercontent.com/share2us/gui/main/scripts/install.ps1 | iex\`. Linux: \`curl -fsSL https://raw.githubusercontent.com/share2us/gui/main/scripts/install.sh | sh\`. macOS: unzip the .app (unsigned — right-click → Open the first time)." \
+            --latest
