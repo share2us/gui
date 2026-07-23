@@ -55,6 +55,14 @@ type App struct {
 	pendingByIP  map[string]int         // in-flight approval prompts per source IP
 	pendingTotal int                    // in-flight approval prompts overall
 	cooldown     map[string]time.Time   // per-IP auto-reject-until after a decline
+
+	bcMu        sync.Mutex
+	broadcaster *lan.Broadcaster      // active broadcast, if any
+	bcName      string                // broadcast file name
+	bcSize      int64                 // broadcast file size
+	bcAccess    string                // all | trusted | approve
+	bcActive    map[string]lan.BcConn // downloads in progress, keyed by peer IP
+	bcDone      []lan.BcConn          // completed downloads
 }
 
 // Approval anti-spam limits (a peer must not be able to flood the receiver).
@@ -346,6 +354,11 @@ func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
 			out = append(out, ShareOutcome{Path: path, Error: err.Error()})
 		} else {
 			out = append(out, ShareOutcome{Path: path, OK: true})
+			var sz int64
+			if fi, serr := os.Stat(path); serr == nil {
+				sz = fi.Size()
+			}
+			lanid.ActivityAppend(lanid.ActivityEntry{Kind: "sent", Name: filepath.Base(path), Size: sz})
 		}
 	}
 	return out
@@ -451,6 +464,7 @@ func (a *App) SetDiscoverable(on bool) error {
 		},
 		a.approveRequest,
 		func(res lan.Result) {
+			lanid.ActivityAppend(lanid.ActivityEntry{Kind: "received", Peer: res.From, Name: res.Name, Size: res.Bytes})
 			wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
 				"name": res.Name, "path": res.Path, "bytes": res.Bytes, "from": res.From,
 			})
@@ -470,13 +484,18 @@ func (a *App) SetDiscoverable(on bool) error {
 // (per-IP cap, global cap, post-decline cooldown) and then the normal prompt,
 // which also offers "Accept & trust". Runs concurrently (one goroutine per
 // inbound connection).
-func (a *App) approveRequest(r lan.Request) bool {
+func (a *App) approveRequest(r lan.Request) bool { return a.gate(r, "send") }
+
+// approveDownload gates an inbound broadcast download (approve access mode).
+func (a *App) approveDownload(r lan.Request) bool { return a.gate(r, "download") }
+
+// gate decides an inbound transfer (send) or broadcast download. A trusted device
+// (by verified key fingerprint) auto-accepts; otherwise the anti-spam limits apply
+// and the user is prompted. action ("send"|"download") only affects prompt wording.
+func (a *App) gate(r lan.Request, action string) bool {
 	if r.Fingerprint != "" {
-		if td, ok := lanid.Lookup(r.Fingerprint); ok {
-			if td.Mode == "auto" {
-				return true // trusted + auto: lands silently; OnReceived toasts + logs
-			}
-			return a.promptApproval(r, true) // trusted + ask: prompt, no caps
+		if _, ok := lanid.Lookup(r.Fingerprint); ok {
+			return true // trusted = auto-accept
 		}
 	}
 
@@ -501,7 +520,7 @@ func (a *App) approveRequest(r lan.Request) bool {
 	a.pendingTotal++
 	a.discMu.Unlock()
 
-	ok := a.promptApproval(r, false)
+	ok := a.promptApproval(r, action)
 
 	a.discMu.Lock()
 	if a.pendingByIP[r.From] > 0 {
@@ -521,9 +540,8 @@ func (a *App) approveRequest(r lan.Request) bool {
 }
 
 // promptApproval raises a "lan-request" prompt and blocks until RespondLanRequest
-// (or a timeout / shutdown). trusted marks the prompt as coming from an
-// already-trusted device in the UI.
-func (a *App) promptApproval(r lan.Request, trusted bool) bool {
+// (or a timeout / shutdown). action ("send"|"download") lets the UI word it.
+func (a *App) promptApproval(r lan.Request, action string) bool {
 	a.discMu.Lock()
 	if a.reqs == nil {
 		a.reqs = make(map[string]chan bool)
@@ -536,7 +554,7 @@ func (a *App) promptApproval(r lan.Request, trusted bool) bool {
 
 	wailsRuntime.EventsEmit(a.ctx, "lan-request", map[string]any{
 		"id": id, "from": r.From, "name": r.Name, "size": r.Size,
-		"fingerprint": r.Fingerprint, "senderName": r.SenderName, "code": r.Code, "trusted": trusted,
+		"fingerprint": r.Fingerprint, "senderName": r.SenderName, "code": r.Code, "action": action,
 	})
 
 	ok := false
@@ -552,11 +570,10 @@ func (a *App) promptApproval(r lan.Request, trusted bool) bool {
 	return ok
 }
 
-// TrustDevice adds a sender (by verified key fingerprint) to the trusted list
-// with a mode ("ask" or "auto"). Called from the approval prompt's
-// "Accept & trust".
-func (a *App) TrustDevice(fingerprint, name, mode string) error {
-	return lanid.Trust(fingerprint, name, mode)
+// TrustDevice adds a device (by verified key fingerprint) to the trusted list
+// (trusted = auto-accept, revocable). Called from "Accept & trust".
+func (a *App) TrustDevice(fingerprint, name string) error {
+	return lanid.Trust(fingerprint, name)
 }
 
 // UntrustDevice revokes trust for a device.
@@ -567,6 +584,143 @@ func (a *App) UntrustDevice(fingerprint string) error {
 // ListTrusted returns the trusted devices for the Settings management list.
 func (a *App) ListTrusted() []lanid.TrustedDevice {
 	return lanid.List()
+}
+
+// ---- broadcast (pull) ----
+
+// BroadcastState is the live view of the current broadcast for the detail screen.
+type BroadcastState struct {
+	Active      bool         `json:"active"`
+	Name        string       `json:"name"`
+	Size        int64        `json:"size"`
+	Access      string       `json:"access"`
+	Downloading []lan.BcConn `json:"downloading"`
+	Completed   []lan.BcConn `json:"completed"`
+}
+
+// StartBroadcast offers path to nearby devices (pull) with the given access mode
+// ("all" | "trusted" | "approve", default approve). Replaces any current broadcast.
+func (a *App) StartBroadcast(path, access string) (BroadcastState, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return BroadcastState{}, err
+	}
+	if access != "all" && access != "trusted" && access != "approve" {
+		access = "approve"
+	}
+	a.bcMu.Lock()
+	if a.broadcaster != nil {
+		a.broadcaster.Stop()
+	}
+	a.bcActive = make(map[string]lan.BcConn)
+	a.bcDone = nil
+	a.bcName = filepath.Base(path)
+	a.bcSize = info.Size()
+	a.bcAccess = access
+	a.bcMu.Unlock()
+
+	b, err := lan.StartBroadcast(a.ctx, path, access, a.approveDownload, a.onBcConn, func(e error) {
+		wailsRuntime.EventsEmit(a.ctx, "lan-bc-error", map[string]any{"error": e.Error()})
+	})
+	if err != nil {
+		return BroadcastState{}, err
+	}
+	a.bcMu.Lock()
+	a.broadcaster = b
+	a.bcMu.Unlock()
+	return a.broadcastState(), nil
+}
+
+// onBcConn tracks a broadcast connection (progress / completion) and forwards it.
+func (a *App) onBcConn(c lan.BcConn) {
+	a.bcMu.Lock()
+	name, size := a.bcName, a.bcSize
+	switch {
+	case c.Done:
+		delete(a.bcActive, c.Peer)
+		a.bcDone = append(a.bcDone, c)
+	case c.Err != "":
+		delete(a.bcActive, c.Peer)
+	default:
+		if a.bcActive == nil {
+			a.bcActive = make(map[string]lan.BcConn)
+		}
+		a.bcActive[c.Peer] = c
+	}
+	a.bcMu.Unlock()
+	if c.Done {
+		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "broadcast", Peer: firstNonEmptyStr(c.Name, c.Peer), Name: name, Size: size})
+	}
+	wailsRuntime.EventsEmit(a.ctx, "lan-bc-conn", c)
+}
+
+// StopBroadcast ends the current broadcast.
+func (a *App) StopBroadcast() {
+	a.bcMu.Lock()
+	b := a.broadcaster
+	a.broadcaster = nil
+	a.bcName, a.bcActive, a.bcDone = "", nil, nil
+	a.bcMu.Unlock()
+	b.Stop()
+}
+
+// BroadcastStats returns the current broadcast + its live connections.
+func (a *App) BroadcastStats() BroadcastState { return a.broadcastState() }
+
+func (a *App) broadcastState() BroadcastState {
+	a.bcMu.Lock()
+	defer a.bcMu.Unlock()
+	st := BroadcastState{Active: a.broadcaster != nil, Name: a.bcName, Size: a.bcSize, Access: a.bcAccess}
+	for _, c := range a.bcActive {
+		st.Downloading = append(st.Downloading, c)
+	}
+	st.Completed = append(st.Completed, a.bcDone...)
+	return st
+}
+
+// DownloadResult reports a completed broadcast download + the source identity so
+// the UI can offer to trust it.
+type DownloadResult struct {
+	Name        string `json:"name"`
+	Fingerprint string `json:"fingerprint"`
+	From        string `json:"from"`
+	Trusted     bool   `json:"trusted"`
+}
+
+// LanDownload pulls a broadcast file (addr + cert fingerprint from the nearby
+// list) into Downloads, resuming if it was interrupted before.
+func (a *App) LanDownload(addr, fingerprint, name string, size int64) (DownloadResult, error) {
+	res, fp, err := lan.Download(a.ctx, addr, fingerprint, name, size, receiver.DownloadsDir(),
+		func(recv, total int64) {
+			wailsRuntime.EventsEmit(a.ctx, "lan-dl-progress", map[string]any{"name": name, "received": recv, "total": total})
+		})
+	if err != nil {
+		return DownloadResult{}, err
+	}
+	lanid.ActivityAppend(lanid.ActivityEntry{Kind: "downloaded", Peer: res.From, Name: res.Name, Size: size})
+	_ = beeep.Notify("Share2Us", "Downloaded "+res.Name, "")
+	_, trusted := lanid.Lookup(fp)
+	return DownloadResult{Name: res.Name, Fingerprint: fp, From: res.From, Trusted: trusted}, nil
+}
+
+// ---- activity log + scan interval ----
+
+// ActivityLog returns the recent transfer/broadcast log (newest first).
+func (a *App) ActivityLog() []lanid.ActivityEntry { return lanid.ActivityList() }
+
+// ClearActivity empties the activity log.
+func (a *App) ClearActivity() { lanid.ActivityClear() }
+
+// GetScanInterval / SetScanInterval control the broadcast-discovery scan cadence.
+func (a *App) GetScanInterval() int      { return lanid.GetScanInterval() }
+func (a *App) SetScanInterval(s int) error { return lanid.SetScanInterval(s) }
+
+// firstNonEmptyStr returns a if non-empty, else b.
+func firstNonEmptyStr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // RespondLanRequest answers a pending "lan-request" prompt (accept or reject).

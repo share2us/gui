@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -133,14 +134,19 @@ func StartReceive(parent context.Context, destDir string, onListen func(Listen),
 // list. Dest is a dial-ready s2u:// code (pins the peer's fingerprint) to pass
 // straight to SendOne.
 type Peer struct {
-	Name string `json:"name"`
-	Addr string `json:"addr"`
-	Dest string `json:"dest"`
-	Code string `json:"code"` // 6-digit verify code (compare to the device's own screen)
-	Mode string `json:"mode"`
+	Name        string `json:"name"`
+	Addr        string `json:"addr"`
+	Dest        string `json:"dest"` // s2u:// send target (receivers)
+	Code        string `json:"code"` // 6-digit verify code (compare to the device's own screen)
+	Mode        string `json:"mode"`
+	Fingerprint string `json:"fingerprint"` // cert fp (download pinning)
+	IsBroadcast bool   `json:"isBroadcast"` // true = offering a file to download
+	FileName    string `json:"fileName"`
+	FileSize    int64  `json:"fileSize"`
 }
 
-// Browse lists nearby Share2Us receivers advertising on the local network.
+// Browse lists nearby Share2Us endpoints — receivers (send targets) and
+// broadcasters (files to download).
 func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
 	found, err := lanshare.Browse(ctx, timeout)
 	if err != nil {
@@ -149,11 +155,15 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
 	out := make([]Peer, 0, len(found))
 	for _, p := range found {
 		out = append(out, Peer{
-			Name: p.Name,
-			Addr: p.Addr(),
-			Dest: lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
-			Code: lanshare.VerifyCode(p.Fingerprint),
-			Mode: p.Mode,
+			Name:        p.Name,
+			Addr:        p.Addr(),
+			Dest:        lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
+			Code:        lanshare.VerifyCode(p.Fingerprint),
+			Mode:        p.Mode,
+			Fingerprint: p.Fingerprint,
+			IsBroadcast: p.IsBroadcast,
+			FileName:    p.FileName,
+			FileSize:    p.FileSize,
 		})
 	}
 	return out, nil
@@ -229,6 +239,100 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// BcConn is a broadcast connection update surfaced to the UI (live stats).
+type BcConn struct {
+	Fingerprint string `json:"fingerprint"` // downloader identity fp ("" = anonymous)
+	Name        string `json:"name"`        // downloader display name
+	Peer        string `json:"peer"`        // IP
+	Sent        int64  `json:"sent"`
+	Total       int64  `json:"total"`
+	Done        bool   `json:"done"`
+	Err         string `json:"err"`
+}
+
+// Broadcaster is a running broadcast; Stop cancels it.
+type Broadcaster struct{ cancel context.CancelFunc }
+
+// Stop cancels the broadcast.
+func (b *Broadcaster) Stop() {
+	if b != nil && b.cancel != nil {
+		b.cancel()
+	}
+}
+
+// StartBroadcast serves path to nearby devices (pull) with the given access mode
+// ("all" | "trusted" | "approve"), advertising it over mDNS. approve is consulted
+// per download in approve mode; onConn reports live per-connection progress.
+func StartBroadcast(parent context.Context, path, access string, approve func(Request) bool, onConn func(BcConn), onErr func(error)) (*Broadcaster, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, errors.New("can't broadcast a folder — zip it first")
+	}
+	name := filepath.Base(path)
+	size := info.Size()
+	ctx, cancel := context.WithCancel(parent)
+	ip := PrimaryIP()
+	id, _ := lanid.Identity()
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "Share2Us"
+	}
+	go func() {
+		var adv io.Closer
+		berr := lanshare.Broadcast(ctx, lanshare.BroadcastOptions{
+			Path: path, Name: name, Bind: ip, Access: access, Identity: id,
+			IsTrusted: func(fp string) bool { _, ok := lanid.Lookup(fp); return ok },
+			OnRequest: func(r lanshare.RequestInfo) bool {
+				fp := lanshare.IdentityFingerprint(r.SenderKey)
+				return approve(Request{
+					From: firstNonEmpty(r.PeerIP, "a nearby device"), Name: r.Name, Size: r.Size,
+					Fingerprint: fp, SenderName: r.SenderName, Code: lanshare.VerifyCode(fp),
+				})
+			},
+			OnListen: func(li lanshare.ListenInfo) {
+				if a, aerr := lanshare.AdvertiseBroadcast(host, li, name, size); aerr == nil {
+					adv = a
+				}
+			},
+			OnConn: func(ev lanshare.ConnEvent) {
+				if onConn != nil {
+					onConn(BcConn{
+						Fingerprint: lanshare.IdentityFingerprint(ev.PeerKey), Name: ev.PeerName, Peer: ev.PeerIP,
+						Sent: ev.Sent, Total: ev.Total, Done: ev.Done, Err: ev.Err,
+					})
+				}
+			},
+		})
+		if adv != nil {
+			_ = adv.Close()
+		}
+		if berr != nil && ctx.Err() == nil && onErr != nil {
+			onErr(berr)
+		}
+	}()
+	return &Broadcaster{cancel}, nil
+}
+
+// Download pulls a broadcast file (addr + cert fingerprint from Browse) into
+// destDir, resuming if interrupted. Returns the result and the broadcaster's
+// verified identity fingerprint (for the trust check / offer).
+func Download(ctx context.Context, addr, fingerprint, name string, size int64, destDir string, onProgress func(received, total int64)) (Result, string, error) {
+	id, _ := lanid.Identity()
+	host, _ := os.Hostname()
+	res, err := lanshare.Download(ctx, lanshare.DownloadOptions{
+		Dest: addr, PinFingerprint: fingerprint, Name: name, Size: size, DestDir: destDir,
+		Identity: id, DownloaderName: host, OnProgress: onProgress,
+	})
+	if err != nil {
+		return Result{}, "", err
+	}
+	fp := lanshare.IdentityFingerprint(res.SenderKey)
+	return Result{Name: res.Name, Path: res.Path, Bytes: res.Bytes, From: firstNonEmpty(res.PeerIP, "a nearby device")}, fp, nil
 }
 
 // PrimaryIP returns this host's primary outbound LAN/overlay IP (the address a

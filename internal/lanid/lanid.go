@@ -83,12 +83,12 @@ func Code() string { return lanshare.VerifyCode(Fingerprint()) }
 
 // ---- trusted-devices store --------------------------------------------------
 
-// TrustedDevice is a receiver-side trusted sender. Mode is "ask" (still confirm
-// each transfer, no code) or "auto" (accept silently).
+// TrustedDevice is a device we've trusted, keyed by its verified Ed25519 key
+// fingerprint. Trusted = auto-accept (its transfers land without a prompt);
+// untrusted devices always prompt. Revocable.
 type TrustedDevice struct {
 	Fingerprint string `json:"fingerprint"`
 	Name        string `json:"name"`
-	Mode        string `json:"mode"`
 }
 
 type trustStore struct {
@@ -156,9 +156,8 @@ func Lookup(fingerprint string) (TrustedDevice, bool) {
 	return d, ok
 }
 
-// Trust adds/updates a trusted device. Any mode other than "auto" is stored as
-// "ask" (never silently auto-accept unless explicitly chosen).
-func Trust(fingerprint, name, mode string) error {
+// Trust adds/updates a trusted device (trusted = auto-accept, revocable).
+func Trust(fingerprint, name string) error {
 	if fingerprint == "" {
 		return nil
 	}
@@ -166,11 +165,8 @@ func Trust(fingerprint, name, mode string) error {
 	if err != nil {
 		return err
 	}
-	if mode != "auto" {
-		mode = "ask"
-	}
 	s.mu.Lock()
-	s.m[fingerprint] = TrustedDevice{Fingerprint: fingerprint, Name: name, Mode: mode}
+	s.m[fingerprint] = TrustedDevice{Fingerprint: fingerprint, Name: name}
 	s.saveLocked()
 	s.mu.Unlock()
 	return nil

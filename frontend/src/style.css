@@ -894,3 +894,436 @@ select:focus {
 .trusted-revoke:hover {
   border-color: var(--danger);
 }
+
+/* ══ Home: + Share CTA + scrollable one-line activity feed ═══════════════ */
+.home {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 14px;
+  overflow: hidden;
+}
+.share-cta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 10px;
+  padding: 13px;
+  font-size: 14.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.share-cta:hover {
+  background: var(--accent-hover);
+}
+.share-cta .plus {
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 400;
+}
+.sec-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sec-head b {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+}
+.refresh {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: border-color 0.12s, transform 0.4s;
+}
+.refresh:hover {
+  border-color: var(--accent);
+}
+.refresh:active {
+  transform: rotate(180deg);
+}
+.feed-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 2px;
+}
+
+/* One-line feed item: icon · line (grows) · actions. Fixed row height so the
+   list never reflows as items load. */
+.item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.item.warn {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.item.log {
+  background: transparent;
+  border-color: transparent;
+  min-height: 32px;
+  padding: 4px 9px;
+}
+.item .ico {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+.item .ico.done {
+  background: transparent;
+  color: var(--muted);
+}
+.item .ico.out {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+.item .line {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.item.log .line {
+  color: var(--muted);
+}
+.item.log .line b {
+  color: var(--text);
+  font-weight: 600;
+}
+.item .meta {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+.item .acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.warn-ic {
+  color: #e0a83a;
+  font-size: 14px;
+  cursor: default;
+}
+.tag {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 5px;
+  padding: 1px 6px;
+  letter-spacing: 0.02em;
+}
+.tag.code {
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.tag.live {
+  color: var(--accent-text);
+  background: var(--accent);
+  text-transform: uppercase;
+}
+.empty {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 18px 8px;
+  text-align: center;
+}
+
+/* 28px inline icon button (send arrow, download, stop). Same height as .icon-btn
+   so rows never mismatch. */
+.ib {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: border-color 0.12s, background 0.12s;
+}
+.ib:hover {
+  border-color: var(--accent);
+}
+.ib.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+.ib.on:hover {
+  background: var(--accent-hover);
+}
+
+/* ══ Share modal: destination picker ════════════════════════════════════ */
+.dest {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dest-opt {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-2);
+  padding: 11px 13px;
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+.dest-opt:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.dest-opt.sel {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+.dest-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.dest-top .dot {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+}
+.dest-opt.sel .dot {
+  border-color: var(--accent);
+  background:
+    radial-gradient(circle at center, var(--accent) 0 3px, transparent 3.5px);
+}
+.free,
+.need {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 5px;
+  padding: 2px 7px;
+  letter-spacing: 0.02em;
+}
+.free {
+  color: var(--accent-text);
+  background: var(--accent);
+  text-transform: lowercase;
+}
+.need {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.dest-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 11px;
+}
+.dest-body input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+.mini-dev {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.mini-dev .n {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Broadcast access modes (radio-ish rows) */
+.modes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mode {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 11px;
+  cursor: pointer;
+}
+.mode small {
+  color: var(--muted);
+  font-weight: 400;
+}
+.mode .r {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+}
+.mode.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+.mode.on .r {
+  border-color: var(--accent);
+  background:
+    radial-gradient(circle at center, var(--accent) 0 3px, transparent 3.5px);
+}
+
+/* ══ Broadcast detail: live connections + stats ═════════════════════════ */
+.stat-strip {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.stat-strip b {
+  color: var(--text);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.grp-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.grp-label .n {
+  color: var(--accent);
+}
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 12.5px;
+}
+.conn .cn {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conn .bar {
+  flex: none;
+  width: 96px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.conn .bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+.conn .pct {
+  flex: none;
+  width: 34px;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.conn .when {
+  flex: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Download-trust warning line */
+.warn-line {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  background: color-mix(in srgb, #e0a83a 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, #e0a83a 40%, var(--border));
+  border-radius: 8px;
+  padding: 9px 11px;
+}
+.chk2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.chk2 select {
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+/* ══ Toast (transient confirmation, top-right, no layout shift) ══════════ */
+.toast {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 40;
+  max-width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  padding: 10px 13px;
+  font-size: 12.5px;
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.25s, transform 0.25s;
+}
+.toast.in {
+  opacity: 1;
+  transform: translateY(0);
+}
