@@ -432,7 +432,7 @@ function devicePanel(): string {
       const dis = d.hasKey ? '' : 'disabled';
       const cur = d.current ? ' (this device)' : '';
       const noKey = d.hasKey ? '' : ' — no key yet';
-      return `<option value="${d.sessionId}" data-pub="${escapeHtml(d.publicKey)}" ${dis}>${escapeHtml(
+      return `<option value="${escapeHtml(d.sessionId)}" data-pub="${escapeHtml(d.publicKey)}" ${dis}>${escapeHtml(
         d.label
       )}${cur}${noKey}</option>`;
     })
@@ -527,7 +527,7 @@ function trustDeviceList(): string {
       const dis = d.hasKey ? '' : 'disabled';
       const cur = d.current ? ' (this device)' : '';
       const noKey = d.hasKey ? '' : '<span class="setting-help">No key yet.</span>';
-      return `<label class="setting-row${d.hasKey ? '' : ' is-disabled'}"><input type="checkbox" class="trust-dev" data-id="${d.sessionId}" ${
+      return `<label class="setting-row${d.hasKey ? '' : ' is-disabled'}"><input type="checkbox" class="trust-dev" data-id="${escapeHtml(d.sessionId)}" ${
         d.exposed ? 'checked' : ''
       } ${dis} /><span class="setting-label">${escapeHtml(d.label)}${cur}${noKey}</span></label>`;
     })

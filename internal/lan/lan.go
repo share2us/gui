@@ -6,6 +6,7 @@ package lan
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -60,6 +61,13 @@ func SendOne(ctx context.Context, path, dest, password string, onProgress func(s
 		if password == "" {
 			opts.Password = pi.Password
 		}
+	}
+	// Refuse a send that can't authenticate the receiver: without a pinned cert
+	// fingerprint (from a full s2u:// code) AND without a passphrase (PAKE), the
+	// TLS session accepts any certificate, so an on-path LAN attacker could
+	// intercept the file. Steer the user to the receiver's full code or passphrase.
+	if opts.PinFingerprint == "" && opts.Password == "" {
+		return errors.New("can't verify that device: use the receiver's full code (it pins the device), or add its passphrase — a bare address alone isn't safe on an untrusted network")
 	}
 	_, err = lanshare.Send(ctx, name, size, isDir, f, opts)
 	return err
@@ -158,6 +166,7 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 		var adv io.Closer
 		_, err := lanshare.Receive(ctx, lanshare.ReceiveOptions{
 			DestDir:    destDir,
+			Bind:       ip,   // bind the LAN/overlay IP, not 0.0.0.0 (limit exposure)
 			NoPassword: true, // open listener, but every transfer is user-approved
 			Loop:       true,
 			OnListen: func(info lanshare.ListenInfo) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -604,6 +605,12 @@ func (a *App) ApplyUpdate() error {
 		if err != nil {
 			return err
 		}
+		// Never execute the downloaded installer unless it carries a Valid
+		// Authenticode signature from Share2.us (fail-closed). This is the last
+		// line of defence if the download were somehow tampered.
+		if err := update.VerifySignature(path); err != nil {
+			return err
+		}
 		if err := exec.Command(path).Start(); err != nil {
 			return err
 		}
@@ -616,13 +623,42 @@ func (a *App) ApplyUpdate() error {
 	return nil
 }
 
-// downloadTemp fetches url into a uniquely-named temp file and returns its path.
-func downloadTemp(ctx context.Context, url, name string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// allowedUpdateHost restricts update downloads (and every redirect hop) to
+// GitHub hosts, so a tampered release URL or a redirect can never point the
+// auto-updater at an arbitrary server.
+func allowedUpdateHost(h string) bool {
+	h = strings.ToLower(h)
+	return h == "github.com" || h == "api.github.com" || h == "githubusercontent.com" ||
+		strings.HasSuffix(h, ".githubusercontent.com") || strings.HasSuffix(h, ".github.com")
+}
+
+// downloadTemp fetches rawURL into a uniquely-named temp file and returns its
+// path. It requires HTTPS + a GitHub host for the URL and for every redirect hop
+// (no scheme downgrade, no off-host redirect).
+func downloadTemp(ctx context.Context, rawURL, name string) (string, error) {
+	if u, perr := neturl.Parse(rawURL); perr != nil || u.Scheme != "https" || !allowedUpdateHost(u.Hostname()) {
+		return "", errors.New("refusing to download the update from an unexpected URL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", err
 	}
-	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
+	client := &http.Client{
+		Timeout: 5 * time.Minute,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			if r.URL.Scheme != "https" {
+				return errors.New("refusing an insecure (non-HTTPS) update redirect")
+			}
+			if !allowedUpdateHost(r.URL.Hostname()) {
+				return errors.New("refusing an update redirect to an unexpected host")
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
