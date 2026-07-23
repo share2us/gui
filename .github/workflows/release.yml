@@ -51,10 +51,10 @@ jobs:
           - { id: darwin,      os: macos-latest,     platform: darwin/universal, ext: zip, app: true }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with: { go-version: "1.25", check-latest: true }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "20" }
       - name: Install wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
@@ -90,7 +90,7 @@ jobs:
           fi
           ( cd dist && cksum "$name" > "$name.crc32" && $SHA "$name" | awk '{print $1}' > "$name.sha256" )
           ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pkg-${{ matrix.id }}
           path: dist/*
@@ -101,10 +101,10 @@ jobs:
     needs: version
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with: { go-version: "1.25", check-latest: true }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "20" }
       - name: Install wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
@@ -187,7 +187,7 @@ jobs:
           # the publish glob only ever sees files, never subdirectories).
           Copy-Item dist\*.msix installer\windows\Output\
           Copy-Item dist\Share2Us-Cert.cer installer\windows\Output\
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pkg-installer
           # Setup.exe bundles the MSIX + cert; the standalone .msix + .cer are also
@@ -200,7 +200,7 @@ jobs:
     if: ${{ always() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: staging, pattern: "pkg-*", merge-multiple: true }
       - name: Publish release
         env:
