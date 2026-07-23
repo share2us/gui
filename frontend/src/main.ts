@@ -58,7 +58,7 @@ type DeviceAccess = {
   exposed: boolean;
 };
 type LanListen = { address: string; port: number; passphrase: string; pairing: string; destDir: string };
-type LanPeer = { name: string; addr: string; dest: string; mode: string };
+type LanPeer = { name: string; addr: string; dest: string; code: string; mode: string };
 type LanRequest = { id: string; from: string; name: string; size: number };
 type ClipSuggestion = { kind: 'image' | 'text' | 'none'; preview: string; ext: string };
 
@@ -116,7 +116,9 @@ const state = {
   netStatus: '' as string,
   peers: [] as LanPeer[],
   browsing: false as boolean,
-  request: null as LanRequest | null,
+  requests: [] as LanRequest[],
+  discCode: '' as string,
+  discAddr: '' as string,
   // Clipboard suggestion (Windows backend read).
   clip: null as ClipSuggestion | null,
 };
@@ -203,6 +205,7 @@ function renderShare() {
         </div>
       </header>
       ${updateBanner()}
+      ${discoverableBanner()}
       ${loginProgress()}
       <div class="modal-body">
         ${filesBlock()}
@@ -226,9 +229,17 @@ function renderShare() {
           canPrimary() ? '' : `disabled title="${escapeHtml(primaryDisabledReason())}"`
         }>${escapeHtml(primaryLabel())}</button>
       </footer>
-      ${state.request ? requestOverlay(state.request) : ''}
+      ${state.requests.length ? requestOverlay(state.requests[0]) : ''}
     </div>`;
   wire();
+}
+
+// discoverableBanner shows, while Discoverable, this device's verify code so a
+// sender can confirm they picked the right device (compare against their list).
+function discoverableBanner(): string {
+  if (!state.status?.discoverable) return '';
+  const code = state.discCode ? `<b>Verify code ${escapeHtml(state.discCode)}</b>` : 'starting…';
+  return `<div class="disc-bar">📡 Discoverable — nearby devices can send you files. ${code}</div>`;
 }
 
 // requestOverlay is the accept/reject prompt shown when a nearby device wants to
@@ -383,13 +394,16 @@ function nearbyList(): string {
     return `<div class="hint">None found yet. Press Find — the other device must have “Discoverable” on (in Settings).</div>`;
   }
   return `<div class="peers">${state.peers
-    .map(
-      (p) =>
-        `<button class="peer-row" data-dest="${escapeHtml(p.dest)}"><span class="peer-name">${escapeHtml(
-          p.name
-        )}</span><span class="peer-addr">${escapeHtml(p.addr)}</span><span class="peer-go">Send →</span></button>`
-    )
-    .join('')}</div>`;
+      .map(
+        (p) =>
+          `<button class="peer-row" data-dest="${escapeHtml(p.dest)}"><span class="peer-name">${escapeHtml(
+            p.name
+          )}</span>${
+            p.code ? `<span class="peer-code" title="Confirm this matches the code on their screen">${escapeHtml(p.code)}</span>` : ''
+          }<span class="peer-go">Send →</span></button>`
+      )
+      .join('')}</div>
+    <div class="hint">Confirm the code matches the one shown on the other device before sending.</div>`;
 }
 
 function lanReceivePanel(): string {
@@ -638,8 +652,7 @@ async function lanSendTo(dest: string) {
 }
 
 async function respondRequest(accept: boolean) {
-  const r = state.request;
-  state.request = null;
+  const r = state.requests.shift(); // dequeue the head; the next (if any) shows
   render();
   if (r) {
     try {
@@ -809,6 +822,11 @@ function wire() {
     try {
       await backend().SetDiscoverable(disc.checked);
       if (state.status) state.status.discoverable = disc.checked;
+      if (!disc.checked) {
+        state.discCode = '';
+        state.discAddr = '';
+      }
+      render();
     } catch {
       disc.checked = !disc.checked;
     }
@@ -1057,11 +1075,19 @@ function setupInputListeners() {
     const btn = root.querySelector<HTMLButtonElement>('#primary-btn');
     if (btn) btn.textContent = `Sending… ${pct}%`;
   });
-  // Incoming transfer wants approval (Discoverable mode).
+  // Incoming transfer wants approval (Discoverable mode). Queue it so a flood
+  // can't overwrite/race the modal; the head is shown, the rest wait.
   rt?.EventsOn?.('lan-request', (r: any) => {
     if (!r?.id) return;
-    state.request = { id: String(r.id), from: String(r.from || ''), name: String(r.name || 'file'), size: Number(r.size) || 0 };
+    state.requests.push({ id: String(r.id), from: String(r.from || ''), name: String(r.name || 'file'), size: Number(r.size) || 0 });
     if (state.view !== 'share') state.view = 'share';
+    render();
+  });
+  // Discoverable status (our own listen details) — carries the verify code.
+  rt?.EventsOn?.('lan-discoverable', (d: any) => {
+    if (d?.error) return;
+    state.discCode = String(d?.code || '');
+    state.discAddr = String(d?.address || '');
     render();
   });
   // Re-check the clipboard when the window regains focus.

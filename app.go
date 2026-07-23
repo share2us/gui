@@ -47,11 +47,22 @@ type App struct {
 	lanRecv *lan.Receiver // an active one-shot local-network receiver, if any
 
 	discMu       sync.Mutex
-	discRecv     *lan.Receiver        // persistent discoverable serve loop, if on
-	discoverable bool                 // whether we are advertising + serving
-	reqs         map[string]chan bool // pending approval prompts, by id
+	discRecv     *lan.Receiver          // persistent discoverable serve loop, if on
+	discoverable bool                   // whether we are advertising + serving
+	reqs         map[string]chan bool   // pending approval prompts, by id
 	reqSeq       uint64
+	pendingByIP  map[string]int         // in-flight approval prompts per source IP
+	pendingTotal int                    // in-flight approval prompts overall
+	cooldown     map[string]time.Time   // per-IP auto-reject-until after a decline
 }
+
+// Approval anti-spam limits (a peer must not be able to flood the receiver).
+const (
+	maxPendingPerIP   = 1
+	maxPendingTotal   = 3
+	declineCooldown   = 30 * time.Second
+	approvalWaitLimit = 60 * time.Second
+)
 
 // NewApp constructs the app with the paths selected in Explorer (may be empty).
 func NewApp(pending []string) *App {
@@ -66,6 +77,23 @@ func (a *App) startup(ctx context.Context) {
 			wailsRuntime.EventsEmit(ctx, "files-dropped", paths)
 		}
 	})
+	go cleanupOldTemps() // remove staged paste/update temp dirs left by prior runs
+}
+
+// cleanupOldTemps best-effort removes leftover Share2Us temp dirs (staged pastes
+// and downloaded updates) from previous runs. It only ever touches our own
+// prefixed dirs, and the current run's files are created after startup, so they
+// are never affected.
+func cleanupOldTemps() {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() && (strings.HasPrefix(e.Name(), "share2us-paste-") || strings.HasPrefix(e.Name(), "share2us-update-")) {
+			_ = os.RemoveAll(filepath.Join(os.TempDir(), e.Name()))
+		}
+	}
 }
 
 // maxPasteBytes caps clipboard content written to a temp file.
@@ -418,7 +446,7 @@ func (a *App) SetDiscoverable(on bool) error {
 	}
 	a.discRecv = lan.Serve(a.ctx, name, receiver.DownloadsDir(),
 		func(l lan.Listen) {
-			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"address": l.Address, "name": name})
+			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"address": l.Address, "name": name, "code": l.Code})
 		},
 		a.approveRequest,
 		func(res lan.Result) {
@@ -434,33 +462,66 @@ func (a *App) SetDiscoverable(on bool) error {
 	return nil
 }
 
-// approveRequest blocks the receiver goroutine while it raises a "lan-request"
-// prompt in the UI and waits for RespondLanRequest (or a 60s timeout → reject).
+// approveRequest raises a "lan-request" prompt in the UI and waits for
+// RespondLanRequest (or a timeout → reject). It runs concurrently (one goroutine
+// per inbound connection) and enforces anti-spam limits so a peer can't flood the
+// receiver with prompts: a per-IP cap, a global cap, and a post-decline cooldown.
+// Requests over the limits are auto-rejected without ever showing a prompt.
 func (a *App) approveRequest(r lan.Request) bool {
 	a.discMu.Lock()
+	if a.reqs == nil {
+		a.reqs = make(map[string]chan bool)
+		a.pendingByIP = make(map[string]int)
+		a.cooldown = make(map[string]time.Time)
+	}
+	// Cooldown: a recently-declined IP is silently rejected for a window.
+	if until, ok := a.cooldown[r.From]; ok {
+		if time.Now().Before(until) {
+			a.discMu.Unlock()
+			return false
+		}
+		delete(a.cooldown, r.From)
+	}
+	// Caps: bound prompts per IP and overall.
+	if a.pendingByIP[r.From] >= maxPendingPerIP || a.pendingTotal >= maxPendingTotal {
+		a.discMu.Unlock()
+		return false
+	}
 	a.reqSeq++
 	id := "req" + strconv.FormatUint(a.reqSeq, 10)
 	ch := make(chan bool, 1)
-	if a.reqs == nil {
-		a.reqs = make(map[string]chan bool)
-	}
 	a.reqs[id] = ch
+	a.pendingByIP[r.From]++
+	a.pendingTotal++
 	a.discMu.Unlock()
 
 	wailsRuntime.EventsEmit(a.ctx, "lan-request", map[string]any{
 		"id": id, "from": r.From, "name": r.Name, "size": r.Size,
 	})
+
+	ok := false
 	select {
-	case ok := <-ch:
-		return ok
-	case <-time.After(60 * time.Second):
-		a.discMu.Lock()
-		delete(a.reqs, id)
-		a.discMu.Unlock()
-		return false
+	case ok = <-ch:
+	case <-time.After(approvalWaitLimit):
 	case <-a.ctx.Done():
-		return false
 	}
+
+	a.discMu.Lock()
+	delete(a.reqs, id)
+	if a.pendingByIP[r.From] > 0 {
+		a.pendingByIP[r.From]--
+		if a.pendingByIP[r.From] == 0 {
+			delete(a.pendingByIP, r.From)
+		}
+	}
+	if a.pendingTotal > 0 {
+		a.pendingTotal--
+	}
+	if !ok {
+		a.cooldown[r.From] = time.Now().Add(declineCooldown) // back off a declining/ignored peer
+	}
+	a.discMu.Unlock()
+	return ok
 }
 
 // RespondLanRequest answers a pending "lan-request" prompt (accept or reject).

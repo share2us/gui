@@ -23,6 +23,7 @@ type Listen struct {
 	Port       int    `json:"port"`       // listen port
 	Passphrase string `json:"passphrase"` // password-mode passphrase (else "")
 	Pairing    string `json:"pairing"`    // s2u:// string (address + fingerprint + pass)
+	Code       string `json:"code"`       // 6-digit verify code (compare to sender's list)
 	DestDir    string `json:"destDir"`    // where received files land
 }
 
@@ -102,6 +103,7 @@ func StartReceive(parent context.Context, destDir string, onListen func(Listen),
 					Port:       info.Port,
 					Passphrase: info.Passphrase,
 					Pairing:    lanshare.BuildPairingString(ip, info),
+					Code:       lanshare.VerifyCode(info.Fingerprint),
 					DestDir:    destDir,
 				})
 			},
@@ -126,6 +128,7 @@ type Peer struct {
 	Name string `json:"name"`
 	Addr string `json:"addr"`
 	Dest string `json:"dest"`
+	Code string `json:"code"` // 6-digit verify code (compare to the device's own screen)
 	Mode string `json:"mode"`
 }
 
@@ -141,6 +144,7 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
 			Name: p.Name,
 			Addr: p.Addr(),
 			Dest: lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
+			Code: lanshare.VerifyCode(p.Fingerprint),
 			Mode: p.Mode,
 		})
 	}
@@ -178,6 +182,7 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 						Address: net.JoinHostPort(ip, strconv.Itoa(info.Port)),
 						Port:    info.Port,
 						Pairing: lanshare.BuildPairingString(ip, info),
+						Code:    lanshare.VerifyCode(info.Fingerprint),
 						DestDir: destDir,
 					})
 				}
