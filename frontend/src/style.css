@@ -685,3 +685,125 @@ select:focus {
   color: var(--accent);
   padding-top: 2px;
 }
+
+/* ── Nearby devices (local discovery) ──────────────────────────────────── */
+.nearby {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nearby-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.peers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.peer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  cursor: pointer;
+  color: var(--text);
+  transition: border-color 0.12s, background 0.12s;
+}
+.peer-row:hover {
+  border-color: var(--accent);
+}
+.peer-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peer-addr {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+}
+.peer-go {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  flex: none;
+}
+.or-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.or-line::before,
+.or-line::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Incoming-request approval overlay ─────────────────────────────────── */
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 20;
+}
+.overlay-card {
+  width: 100%;
+  max-width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.overlay-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.overlay-body {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.overlay-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.btn-accept {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 7px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.btn-accept:hover {
+  background: var(--accent-hover);
+}

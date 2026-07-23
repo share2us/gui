@@ -6,9 +6,11 @@ package lan
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/share2us/cli-core/lanshare"
 	"github.com/share2us/gui/internal/core"
@@ -107,6 +109,94 @@ func StartReceive(parent context.Context, destDir string, onListen func(Listen),
 		onDone(&Result{Name: res.Name, Path: res.Path, Bytes: res.Bytes, From: from}, nil)
 	}()
 	return &Receiver{cancel: cancel}
+}
+
+// Peer is a nearby advertised receiver, ready for the UI's "nearby devices"
+// list. Dest is a dial-ready s2u:// code (pins the peer's fingerprint) to pass
+// straight to SendOne.
+type Peer struct {
+	Name string `json:"name"`
+	Addr string `json:"addr"`
+	Dest string `json:"dest"`
+	Mode string `json:"mode"`
+}
+
+// Browse lists nearby Share2Us receivers advertising on the local network.
+func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
+	found, err := lanshare.Browse(ctx, timeout)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Peer, 0, len(found))
+	for _, p := range found {
+		out = append(out, Peer{
+			Name: p.Name,
+			Addr: p.Addr(),
+			Dest: lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
+			Mode: p.Mode,
+		})
+	}
+	return out, nil
+}
+
+// Request is an inbound transfer awaiting the user's accept/reject decision.
+type Request struct {
+	From  string `json:"from"`
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"isDir"`
+}
+
+// Serve runs a persistent, discoverable receiver: it advertises under name,
+// accepts many transfers over one listener, asks approve() to accept/reject each
+// one, and reports each completed file via onReceived. It returns a handle;
+// Stop (or ctx cancel) tears down the listener and the mDNS advertisement.
+func Serve(parent context.Context, name, destDir string, onListen func(Listen), approve func(Request) bool, onReceived func(Result), onErr func(error)) *Receiver {
+	ctx, cancel := context.WithCancel(parent)
+	ip := PrimaryIP()
+	go func() {
+		var adv io.Closer
+		_, err := lanshare.Receive(ctx, lanshare.ReceiveOptions{
+			DestDir:    destDir,
+			NoPassword: true, // open listener, but every transfer is user-approved
+			Loop:       true,
+			OnListen: func(info lanshare.ListenInfo) {
+				if a, aerr := lanshare.Advertise(name, info); aerr == nil {
+					adv = a
+				}
+				if onListen != nil {
+					onListen(Listen{
+						Address: net.JoinHostPort(ip, strconv.Itoa(info.Port)),
+						Port:    info.Port,
+						Pairing: lanshare.BuildPairingString(ip, info),
+						DestDir: destDir,
+					})
+				}
+			},
+			OnRequest: func(r lanshare.RequestInfo) bool {
+				return approve(Request{From: firstNonEmpty(r.PeerIP, "a nearby device"), Name: r.Name, Size: r.Size, IsDir: r.IsDir})
+			},
+			OnReceived: func(res lanshare.ReceiveResult) {
+				if onReceived != nil {
+					onReceived(Result{Name: res.Name, Path: res.Path, Bytes: res.Bytes, From: firstNonEmpty(res.PeerIP, "a nearby device")})
+				}
+			},
+		})
+		if adv != nil {
+			_ = adv.Close()
+		}
+		if err != nil && ctx.Err() == nil && onErr != nil {
+			onErr(err)
+		}
+	}()
+	return &Receiver{cancel: cancel}
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // PrimaryIP returns this host's primary outbound LAN/overlay IP (the address a

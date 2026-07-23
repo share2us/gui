@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +43,13 @@ type App struct {
 	login   *core.LoginSession // an in-progress device-code login
 
 	lanMu   sync.Mutex
-	lanRecv *lan.Receiver // an active local-network receiver, if any
+	lanRecv *lan.Receiver // an active one-shot local-network receiver, if any
+
+	discMu       sync.Mutex
+	discRecv     *lan.Receiver        // persistent discoverable serve loop, if on
+	discoverable bool                 // whether we are advertising + serving
+	reqs         map[string]chan bool // pending approval prompts, by id
+	reqSeq       uint64
 }
 
 // NewApp constructs the app with the paths selected in Explorer (may be empty).
@@ -156,6 +163,7 @@ type Status struct {
 	CanReceive       bool   `json:"canReceive"`
 	ShellInstalled   bool   `json:"shellInstalled"`
 	AutostartEnabled bool   `json:"autostartEnabled"`
+	Discoverable     bool   `json:"discoverable"`
 }
 
 // Status reports login and capability state for the UI.
@@ -164,6 +172,9 @@ func (a *App) Status() Status {
 		ShellInstalled:   shell.Installed(),
 		AutostartEnabled: autostart.Enabled(),
 	}
+	a.discMu.Lock()
+	s.Discoverable = a.discoverable
+	a.discMu.Unlock()
 	c, err := a.clientOrErr()
 	if err != nil {
 		return s
@@ -369,6 +380,97 @@ func (a *App) LanStopReceive() {
 	a.lanRecv = nil
 	a.lanMu.Unlock()
 	r.Stop()
+}
+
+// LanBrowse lists nearby Share2Us devices that are currently discoverable, for
+// the "nearby devices" picker in the Send flow.
+func (a *App) LanBrowse() ([]lan.Peer, error) {
+	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Second)
+	defer cancel()
+	return lan.Browse(ctx, 1500*time.Millisecond)
+}
+
+// SetDiscoverable turns this device's discoverable receiver on or off. While on,
+// the device advertises on the local network and every incoming transfer raises
+// a "lan-request" approval prompt (answered by RespondLanRequest); accepted files
+// land in Downloads with a toast. Being discoverable is opt-in — off by default.
+func (a *App) SetDiscoverable(on bool) error {
+	a.discMu.Lock()
+	defer a.discMu.Unlock()
+	if !on {
+		if a.discRecv != nil {
+			a.discRecv.Stop()
+			a.discRecv = nil
+		}
+		a.discoverable = false
+		return nil
+	}
+	if a.discRecv != nil {
+		return nil // already discoverable
+	}
+	if a.reqs == nil {
+		a.reqs = make(map[string]chan bool)
+	}
+	name, _ := os.Hostname()
+	if name == "" {
+		name = "Share2Us"
+	}
+	a.discRecv = lan.Serve(a.ctx, name, receiver.DownloadsDir(),
+		func(l lan.Listen) {
+			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"address": l.Address, "name": name})
+		},
+		a.approveRequest,
+		func(res lan.Result) {
+			wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
+				"name": res.Name, "path": res.Path, "bytes": res.Bytes, "from": res.From,
+			})
+			_ = beeep.Notify("Share2Us", "Received "+res.Name+" from "+res.From, "")
+		},
+		func(err error) {
+			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"error": err.Error()})
+		})
+	a.discoverable = true
+	return nil
+}
+
+// approveRequest blocks the receiver goroutine while it raises a "lan-request"
+// prompt in the UI and waits for RespondLanRequest (or a 60s timeout → reject).
+func (a *App) approveRequest(r lan.Request) bool {
+	a.discMu.Lock()
+	a.reqSeq++
+	id := "req" + strconv.FormatUint(a.reqSeq, 10)
+	ch := make(chan bool, 1)
+	if a.reqs == nil {
+		a.reqs = make(map[string]chan bool)
+	}
+	a.reqs[id] = ch
+	a.discMu.Unlock()
+
+	wailsRuntime.EventsEmit(a.ctx, "lan-request", map[string]any{
+		"id": id, "from": r.From, "name": r.Name, "size": r.Size,
+	})
+	select {
+	case ok := <-ch:
+		return ok
+	case <-time.After(60 * time.Second):
+		a.discMu.Lock()
+		delete(a.reqs, id)
+		a.discMu.Unlock()
+		return false
+	case <-a.ctx.Done():
+		return false
+	}
+}
+
+// RespondLanRequest answers a pending "lan-request" prompt (accept or reject).
+func (a *App) RespondLanRequest(id string, accept bool) {
+	a.discMu.Lock()
+	ch := a.reqs[id]
+	delete(a.reqs, id)
+	a.discMu.Unlock()
+	if ch != nil {
+		ch <- accept
+	}
 }
 
 // LoginInfo is returned to the modal so it can show the code / verification page.

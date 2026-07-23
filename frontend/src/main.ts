@@ -9,6 +9,7 @@ type Status = {
   canReceive: boolean;
   shellInstalled: boolean;
   autostartEnabled: boolean;
+  discoverable: boolean;
 };
 type Device = {
   sessionId: string;
@@ -57,6 +58,8 @@ type DeviceAccess = {
   exposed: boolean;
 };
 type LanListen = { address: string; port: number; passphrase: string; pairing: string; destDir: string };
+type LanPeer = { name: string; addr: string; dest: string; mode: string };
+type LanRequest = { id: string; from: string; name: string; size: number };
 type ClipSuggestion = { kind: 'image' | 'text' | 'none'; preview: string; ext: string };
 
 interface AppBackend {
@@ -78,6 +81,9 @@ interface AppBackend {
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
   LanStartReceive(): Promise<LanListen>;
   LanStopReceive(): Promise<void>;
+  LanBrowse(): Promise<LanPeer[]>;
+  SetDiscoverable(on: boolean): Promise<void>;
+  RespondLanRequest(id: string, accept: boolean): Promise<void>;
   ClipboardSuggestion(): Promise<ClipSuggestion>;
   AddClipboard(kind: string): Promise<string>;
 }
@@ -108,6 +114,9 @@ const state = {
   netListen: null as LanListen | null,
   netReceiving: false as boolean,
   netStatus: '' as string,
+  peers: [] as LanPeer[],
+  browsing: false as boolean,
+  request: null as LanRequest | null,
   // Clipboard suggestion (Windows backend read).
   clip: null as ClipSuggestion | null,
 };
@@ -217,8 +226,26 @@ function renderShare() {
           canPrimary() ? '' : `disabled title="${escapeHtml(primaryDisabledReason())}"`
         }>${escapeHtml(primaryLabel())}</button>
       </footer>
+      ${state.request ? requestOverlay(state.request) : ''}
     </div>`;
   wire();
+}
+
+// requestOverlay is the accept/reject prompt shown when a nearby device wants to
+// send us a file (only while Discoverable). Nothing lands until the user accepts.
+function requestOverlay(r: LanRequest): string {
+  return `<div class="overlay">
+    <div class="overlay-card">
+      <div class="overlay-title">Incoming file</div>
+      <div class="overlay-body"><b>${escapeHtml(r.name)}</b> <span class="hint">(${fmtBytes(r.size)})</span>
+        <div class="hint">from ${escapeHtml(r.from)}</div>
+      </div>
+      <div class="overlay-actions">
+        <button class="btn-hdr" id="req-reject">Decline</button>
+        <button class="btn-accept" id="req-accept">Accept → Downloads</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 function updateBanner(): string {
@@ -331,6 +358,16 @@ function networkPanel(): string {
 
 function lanSendPanel(): string {
   return `
+    <div class="nearby">
+      <div class="nearby-head">
+        <span>Nearby devices</span>
+        <button class="btn-mini" id="nearby-find" ${state.browsing ? 'disabled' : ''}>${
+          state.browsing ? 'Scanning…' : 'Find'
+        }</button>
+      </div>
+      ${nearbyList()}
+    </div>
+    <div class="or-line"><span>or enter a code</span></div>
     <label class="fld">Receiver code or address <span class="hint">paste their s2u:// code, or the IP they show</span>
       <input id="net-dest" type="text" placeholder="s2u://…  or  192.168.1.5" value="${escapeHtml(state.netDest)}" />
     </label>
@@ -338,6 +375,21 @@ function lanSendPanel(): string {
       <input id="net-pass" type="password" autocomplete="off" placeholder="leave blank if the code includes it" />
     </label>
     <div class="hint">Sent straight to the other device, end-to-end encrypted. No account needed.</div>`;
+}
+
+function nearbyList(): string {
+  if (state.browsing) return `<div class="hint">Scanning the local network…</div>`;
+  if (!state.peers.length) {
+    return `<div class="hint">None found yet. Press Find — the other device must have “Discoverable” on (in Settings).</div>`;
+  }
+  return `<div class="peers">${state.peers
+    .map(
+      (p) =>
+        `<button class="peer-row" data-dest="${escapeHtml(p.dest)}"><span class="peer-name">${escapeHtml(
+          p.name
+        )}</span><span class="peer-addr">${escapeHtml(p.addr)}</span><span class="peer-go">Send →</span></button>`
+    )
+    .join('')}</div>`;
 }
 
 function lanReceivePanel(): string {
@@ -430,6 +482,9 @@ function settingsBlock(): string {
   return `<details class="settings"${state.settingsOpen ? ' open' : ''}>
     <summary class="settings-summary">Settings</summary>
     <div class="settings-body">
+      <label class="setting-row"><input type="checkbox" id="set-discoverable" ${
+        s.discoverable ? 'checked' : ''
+      } /><span class="setting-label">Discoverable on local network<span class="setting-help">Nearby devices can find this one and send files — you approve every transfer.</span></span></label>
       <label class="setting-row"><input type="checkbox" id="set-shell" ${shellChk} /><span class="setting-label">Right-click Share menu</span></label>
       <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${autoChk} ${autoDis} /><span class="setting-label">Auto-receive files at login${
         s.canReceive ? '' : '<span class="setting-help">Sign in to enable this.</span>'
@@ -544,6 +599,54 @@ async function lanSend() {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Send';
+  }
+}
+
+async function findNearby() {
+  state.browsing = true;
+  render();
+  try {
+    state.peers = (await backend().LanBrowse()) || [];
+  } catch {
+    state.peers = [];
+  }
+  state.browsing = false;
+  render();
+}
+
+async function lanSendTo(dest: string) {
+  if (!state.paths.length) {
+    renderResults([{ path: '', ok: false, error: 'Add a file to send first.' }]);
+    return;
+  }
+  state.netDest = dest;
+  const btn = root.querySelector<HTMLButtonElement>('#primary-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+  }
+  try {
+    renderResults(await backend().LanSend(state.paths, dest, ''));
+  } catch (e) {
+    renderResults([{ path: '', ok: false, error: String(e) }]);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Send';
+    }
+  }
+}
+
+async function respondRequest(accept: boolean) {
+  const r = state.request;
+  state.request = null;
+  render();
+  if (r) {
+    try {
+      await backend().RespondLanRequest(r.id, accept);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -691,6 +794,24 @@ function wire() {
   // Advanced options card open/close.
   root.querySelector<HTMLDetailsElement>('.opt-card')?.addEventListener('toggle', (e) => {
     state.optionsOpen = (e.target as HTMLDetailsElement).open;
+  });
+  // Nearby-devices discovery + one-click send.
+  root.querySelector<HTMLButtonElement>('#nearby-find')?.addEventListener('click', findNearby);
+  root.querySelectorAll<HTMLButtonElement>('.peer-row').forEach((b) =>
+    b.addEventListener('click', () => lanSendTo(b.dataset.dest || ''))
+  );
+  // Incoming-request approval.
+  root.querySelector<HTMLButtonElement>('#req-accept')?.addEventListener('click', () => respondRequest(true));
+  root.querySelector<HTMLButtonElement>('#req-reject')?.addEventListener('click', () => respondRequest(false));
+  // Discoverable toggle (account-free; available to everyone).
+  const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
+  disc?.addEventListener('change', async () => {
+    try {
+      await backend().SetDiscoverable(disc.checked);
+      if (state.status) state.status.discoverable = disc.checked;
+    } catch {
+      disc.checked = !disc.checked;
+    }
   });
   root.querySelector<HTMLButtonElement>('#apply-update')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget as HTMLButtonElement;
@@ -935,6 +1056,13 @@ function setupInputListeners() {
     const pct = p?.total > 0 ? Math.floor((p.sent / p.total) * 100) : 0;
     const btn = root.querySelector<HTMLButtonElement>('#primary-btn');
     if (btn) btn.textContent = `Sending… ${pct}%`;
+  });
+  // Incoming transfer wants approval (Discoverable mode).
+  rt?.EventsOn?.('lan-request', (r: any) => {
+    if (!r?.id) return;
+    state.request = { id: String(r.id), from: String(r.from || ''), name: String(r.name || 'file'), size: Number(r.size) || 0 };
+    if (state.view !== 'share') state.view = 'share';
+    render();
   });
   // Re-check the clipboard when the window regains focus.
   window.addEventListener('focus', () => {
