@@ -56,6 +56,8 @@ type DeviceAccess = {
   hasKey: boolean;
   exposed: boolean;
 };
+type LanListen = { address: string; port: number; passphrase: string; pairing: string; destDir: string };
+type ClipSuggestion = { kind: 'image' | 'text' | 'none'; preview: string; ext: string };
 
 interface AppBackend {
   Status(): Promise<Status>;
@@ -73,6 +75,11 @@ interface AppBackend {
   AddPasted(ext: string, dataB64: string): Promise<string>;
   CheckUpdate(): Promise<UpdateInfo>;
   ApplyUpdate(): Promise<void>;
+  LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
+  LanStartReceive(): Promise<LanListen>;
+  LanStopReceive(): Promise<void>;
+  ClipboardSuggestion(): Promise<ClipSuggestion>;
+  AddClipboard(kind: string): Promise<string>;
 }
 const backend = (): AppBackend => (window as any).go.main.App;
 
@@ -94,6 +101,15 @@ const state = {
   trustError: '' as string,
   theme: 'dark' as 'dark' | 'light',
   update: null as UpdateInfo | null,
+  optionsOpen: false as boolean,
+  // Local-network (LAN / guest) sharing.
+  netMode: 'send' as 'send' | 'receive',
+  netDest: '' as string,
+  netListen: null as LanListen | null,
+  netReceiving: false as boolean,
+  netStatus: '' as string,
+  // Clipboard suggestion (Windows backend read).
+  clip: null as ClipSuggestion | null,
 };
 
 // Brand mark (S2u), inlined so it needs no external asset under the strict CSP.
@@ -145,6 +161,7 @@ async function boot() {
     render();
     setupInputListeners();
     checkForUpdate();
+    checkClipboard();
   } catch (e) {
     root.innerHTML = `<div class="error-box">Could not start: ${escapeHtml(String(e))}</div>`;
   }
@@ -160,38 +177,45 @@ function render() {
 
 function renderShare() {
   const s = state.status!;
+  // Guests can only use Local network sharing; force that destination.
+  if (!s.loggedIn && state.target !== 'network') state.target = 'network';
   root.innerHTML = `
     <div class="modal">
       <header class="modal-head">
         <div class="brand">${BRAND_SVG}<span>Share2Us</span></div>
         <div class="head-actions">
           <button class="icon-btn" id="theme-toggle" title="Toggle light/dark">${state.theme === 'dark' ? '☀' : '☾'}</button>
+          <button class="icon-btn" id="check-update" title="Check for updates">⟳</button>
           ${
             s.loggedIn
-              ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span><button class="icon-btn" id="logout-btn" title="Sign out">⏻</button>`
-              : `<span class="who">not signed in</span>`
+              ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span><button class="btn-hdr" id="logout-btn">Logout</button>`
+              : `<button class="btn-hdr" id="login-btn">Login</button>`
           }
         </div>
       </header>
       ${updateBanner()}
-      ${s.loggedIn ? '' : signInBanner()}
+      ${loginProgress()}
       <div class="modal-body">
         ${filesBlock()}
-        <nav class="tabs">
+        ${
+          s.loggedIn
+            ? `<nav class="tabs">
           ${tab('public', 'Public link')}
           ${tab('private', 'Private (email)')}
           ${tab('device', 'Send to device')}
-          ${tab('network', 'Network', true)}
-        </nav>
+          ${tab('network', 'Local network')}
+        </nav>`
+            : `<div class="section-label">Local network share <span class="pill">no account needed</span></div>`
+        }
         <section class="panel" id="panel">${panel()}</section>
         <div class="results" id="results"></div>
         ${settingsBlock()}
       </div>
       <footer class="modal-foot">
-        ${canShare() ? '' : `<div class="foot-reason">${escapeHtml(shareDisabledReason())}</div>`}
-        <button class="btn-primary" id="share-btn" ${
-          canShare() ? '' : `disabled title="${escapeHtml(shareDisabledReason())}"`
-        }>Share</button>
+        ${canPrimary() ? '' : `<div class="foot-reason">${escapeHtml(primaryDisabledReason())}</div>`}
+        <button class="btn-primary" id="primary-btn" ${
+          canPrimary() ? '' : `disabled title="${escapeHtml(primaryDisabledReason())}"`
+        }>${escapeHtml(primaryLabel())}</button>
       </footer>
     </div>`;
   wire();
@@ -216,7 +240,10 @@ async function checkForUpdate() {
   } catch {}
 }
 
-function signInBanner(): string {
+// loginProgress renders only the transient states of the header Login flow
+// (waiting for browser approval, or an error). The idle "sign in to share"
+// prompt was removed — logging in is initiated from the header Login button.
+function loginProgress(): string {
   if (state.loginPhase === 'waiting' && state.loginInfo) {
     const info = state.loginInfo;
     return `<div class="banner">
@@ -225,13 +252,10 @@ function signInBanner(): string {
       ${info.verificationUrl ? `<button class="btn-mini" id="reopen-login">Reopen page</button>` : ''}
     </div>`;
   }
-  const err = state.loginPhase === 'error' && state.loginError
-    ? `<div class="banner-err">${escapeHtml(state.loginError)}</div>`
-    : '';
-  return `<div class="banner">
-    Sign in to share. <button class="btn-mini" id="sign-in">Sign in</button>
-    <span class="hint">opens your browser</span>
-  </div>${err}`;
+  if (state.loginPhase === 'error' && state.loginError) {
+    return `<div class="banner-err">${escapeHtml(state.loginError)}</div>`;
+  }
+  return '';
 }
 
 function filesBlock(): string {
@@ -240,6 +264,7 @@ function filesBlock(): string {
       <div class="canvas-ico">⬍</div>
       <div class="canvas-title">Drop a file here, or paste with Ctrl+V</div>
       <div class="canvas-sub">Screenshots, images, and text work too — or right-click a file in your file manager → s2u → Share.</div>
+      ${clipChip()}
     </div>`;
   }
   return `<div class="files">${state.paths
@@ -261,25 +286,86 @@ function tab(t: Target, label: string, soon = false): string {
 function panel(): string {
   switch (state.target) {
     case 'public':
-      return `
-        ${noteRow()}
-        ${expiryRow()}
-        ${checkRow('one-time', 'One-time (delete after first download)')}
-        ${passwordRow()}`;
+      return optionsCard('public');
     case 'private':
       return `
         <label class="fld">Recipient emails <span class="hint">comma-separated</span>
           <input id="recipients" type="text" placeholder="alice@example.com, bob@example.com" />
         </label>
-        ${noteRow()}
-        ${expiryRow()}
-        ${checkRow('allow-reshare', 'Allow recipients to reshare')}
-        ${passwordRow()}`;
+        ${optionsCard('private')}`;
     case 'device':
       return devicePanel();
     case 'network':
-      return `<div class="soon-note">Send over the local network (LAN/Tailscale) is coming next.</div>`;
+      return networkPanel();
   }
+}
+
+// optionsCard hides the optional share settings (note, expiry, one-time /
+// reshare, password) behind a card the user opens only when they need them, so
+// the default flow is just: pick files, pick destination, Share.
+function optionsCard(target: Target): string {
+  const extra =
+    target === 'public'
+      ? checkRow('one-time', 'One-time (delete after first download)')
+      : checkRow('allow-reshare', 'Allow recipients to reshare');
+  return `<details class="opt-card"${state.optionsOpen ? ' open' : ''}>
+    <summary class="opt-summary">＋ Options<span class="opt-hint">note, expiry, password</span></summary>
+    <div class="opt-body">
+      ${noteRow()}
+      ${expiryRow()}
+      ${extra}
+      ${passwordRow()}
+    </div>
+  </details>`;
+}
+
+// networkPanel is the account-free LAN transfer UI: a Send / Receive segmented
+// control over cli-core lanshare.
+function networkPanel(): string {
+  const seg = `<div class="seg">
+    <button class="seg-btn ${state.netMode === 'send' ? 'active' : ''}" data-net="send">Send</button>
+    <button class="seg-btn ${state.netMode === 'receive' ? 'active' : ''}" data-net="receive">Receive</button>
+  </div>`;
+  return seg + (state.netMode === 'receive' ? lanReceivePanel() : lanSendPanel());
+}
+
+function lanSendPanel(): string {
+  return `
+    <label class="fld">Receiver code or address <span class="hint">paste their s2u:// code, or the IP they show</span>
+      <input id="net-dest" type="text" placeholder="s2u://…  or  192.168.1.5" value="${escapeHtml(state.netDest)}" />
+    </label>
+    <label class="fld">Password <span class="hint">only if their code has none</span>
+      <input id="net-pass" type="password" autocomplete="off" placeholder="leave blank if the code includes it" />
+    </label>
+    <div class="hint">Sent straight to the other device, end-to-end encrypted. No account needed.</div>`;
+}
+
+function lanReceivePanel(): string {
+  if (!state.netReceiving || !state.netListen) {
+    return `<div class="soon-note">Receive a file from a nearby device with no account — it lands in your Downloads.</div>
+      <div class="hint">Press <b>Start receiving</b> below, then share the code it shows with the sender.</div>`;
+  }
+  const l = state.netListen;
+  return `
+    <div class="hint">Give the sender this code (or your address + passphrase). Incoming files land in your Downloads.</div>
+    <label class="fld">Your code <span class="hint">they paste this into "Receiver code"</span>
+      <div class="copy-row">
+        <input class="link" readonly value="${escapeHtml(l.pairing)}" />
+        <button class="btn-copy" data-copy="${escapeHtml(l.pairing)}">Copy</button>
+      </div>
+    </label>
+    <div class="lan-kv"><span>Address</span><b class="mono">${escapeHtml(l.address)}</b></div>
+    <div class="lan-kv"><span>Passphrase</span><b class="mono">${escapeHtml(l.passphrase)}</b></div>
+    <div class="lan-status" id="lan-status">${escapeHtml(state.netStatus || 'Waiting for a sender…')}</div>`;
+}
+
+// clipChip offers a one-click share of whatever is on the clipboard.
+function clipChip(): string {
+  const c = state.clip;
+  if (!c || c.kind === 'none') return '';
+  const label = c.kind === 'image' ? '🖼 Share clipboard image' : '📄 Share copied text';
+  const prev = c.kind === 'text' && c.preview ? `<div class="clip-prev">${escapeHtml(c.preview)}</div>` : '';
+  return `<div class="clip-suggest"><button class="clip-chip" id="clip-add">${label}</button>${prev}</div>`;
 }
 
 function devicePanel(): string {
@@ -397,13 +483,159 @@ function canShare(): boolean {
   return !!state.status?.loggedIn && state.paths.length > 0 && state.target !== 'network';
 }
 
-// shareDisabledReason explains, in the footer, why Share is disabled so the
-// control isn't a dead end. Order mirrors canShare()'s checks.
+// shareDisabledReason explains why a cloud Share is disabled (guests don't see
+// the cloud tabs, so this is a safety net).
 function shareDisabledReason(): string {
-  if (!state.status?.loggedIn) return 'Sign in to share.';
+  if (!state.status?.loggedIn) return 'Login to share to the cloud.';
   if (state.paths.length === 0) return 'Add a file — drop or paste one above — to share.';
-  if (state.target === 'network') return 'Network sharing is coming soon.';
   return '';
+}
+
+// The footer primary button is context-aware: Share (cloud), Send (LAN send), or
+// Start/Stop receiving (LAN receive).
+function primaryLabel(): string {
+  if (state.target === 'network') {
+    if (state.netMode === 'receive') return state.netReceiving ? 'Stop receiving' : 'Start receiving';
+    return 'Send';
+  }
+  return 'Share';
+}
+function canPrimary(): boolean {
+  if (state.target === 'network') {
+    if (state.netMode === 'receive') return true; // start / stop is always actionable
+    return state.paths.length > 0; // send needs files (address is checked on click)
+  }
+  return canShare();
+}
+function primaryDisabledReason(): string {
+  if (state.target === 'network') {
+    if (state.netMode === 'send' && state.paths.length === 0) return 'Add a file — drop or paste one above — to send.';
+    return '';
+  }
+  return shareDisabledReason();
+}
+
+// onPrimary dispatches the footer button to the right action for the context.
+async function onPrimary() {
+  if (state.target === 'network') {
+    if (state.netMode === 'receive') return state.netReceiving ? stopReceive() : startReceive();
+    return lanSend();
+  }
+  return doShare();
+}
+
+async function lanSend() {
+  const dest = (root.querySelector<HTMLInputElement>('#net-dest')?.value || '').trim();
+  state.netDest = dest;
+  const pass = root.querySelector<HTMLInputElement>('#net-pass')?.value || '';
+  if (!dest) {
+    root.querySelector<HTMLInputElement>('#net-dest')?.focus();
+    renderResults([{ path: '', ok: false, error: 'Enter the receiver’s code or address first.' }]);
+    return;
+  }
+  const btn = root.querySelector<HTMLButtonElement>('#primary-btn')!;
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    const outcomes = await backend().LanSend(state.paths, dest, pass);
+    renderResults(outcomes);
+  } catch (e) {
+    renderResults([{ path: '', ok: false, error: String(e) }]);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send';
+  }
+}
+
+async function startReceive() {
+  const btn = root.querySelector<HTMLButtonElement>('#primary-btn')!;
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  try {
+    const l = await backend().LanStartReceive();
+    state.netListen = l;
+    state.netReceiving = true;
+    state.netStatus = 'Waiting for a sender…';
+    render();
+  } catch (e) {
+    state.netReceiving = false;
+    state.netListen = null;
+    render();
+    renderResults([{ path: '', ok: false, error: String(e) }]);
+  }
+}
+
+async function stopReceive() {
+  try {
+    await backend().LanStopReceive();
+  } catch {
+    /* ignore */
+  }
+  state.netReceiving = false;
+  state.netListen = null;
+  state.netStatus = '';
+  render();
+}
+
+function fmtBytes(n?: number): string {
+  if (!n || n <= 0) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+}
+
+async function checkClipboard() {
+  try {
+    const c = await backend().ClipboardSuggestion();
+    const changed = JSON.stringify(c) !== JSON.stringify(state.clip);
+    state.clip = c && c.kind !== 'none' ? c : null;
+    if (changed && !state.paths.length && state.view === 'share') render();
+  } catch {
+    /* clipboard unavailable (non-Windows) — the Ctrl+V path still works */
+  }
+}
+
+async function addClipboard() {
+  const c = state.clip;
+  if (!c || c.kind === 'none') return;
+  try {
+    addPaths([await backend().AddClipboard(c.kind)]);
+  } catch (e) {
+    renderResults([{ path: '', ok: false, error: String(e) }]);
+  }
+}
+
+// manualUpdateCheck runs an on-demand update check from the header button and
+// either reveals the update banner or briefly confirms the app is up to date.
+async function manualUpdateCheck() {
+  const btn = root.querySelector<HTMLButtonElement>('#check-update');
+  if (!btn) return;
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = '…';
+  try {
+    const info = await backend().CheckUpdate();
+    if (info?.available) {
+      state.update = info;
+      render();
+      return;
+    }
+    btn.textContent = '✓';
+    btn.title = 'Up to date';
+    setTimeout(() => {
+      btn.textContent = prev;
+      btn.title = 'Check for updates';
+      btn.disabled = false;
+    }, 1500);
+  } catch {
+    btn.textContent = prev;
+    btn.disabled = false;
+  }
 }
 
 function wire() {
@@ -427,11 +659,39 @@ function wire() {
     state.selectedDevice = dsel.value;
     dsel.addEventListener('change', () => (state.selectedDevice = dsel.value));
   }
-  root.querySelector<HTMLButtonElement>('#share-btn')?.addEventListener('click', doShare);
-  root.querySelector<HTMLButtonElement>('#sign-in')?.addEventListener('click', signIn);
+  root.querySelector<HTMLButtonElement>('#primary-btn')?.addEventListener('click', onPrimary);
+  root.querySelector<HTMLButtonElement>('#login-btn')?.addEventListener('click', signIn);
   root.querySelector<HTMLButtonElement>('#reopen-login')?.addEventListener('click', () => backend().BeginLogin());
   root.querySelector<HTMLButtonElement>('#theme-toggle')?.addEventListener('click', toggleTheme);
+  root.querySelector<HTMLButtonElement>('#check-update')?.addEventListener('click', manualUpdateCheck);
   root.querySelector<HTMLButtonElement>('#logout-btn')?.addEventListener('click', logout);
+  root.querySelector<HTMLButtonElement>('#clip-add')?.addEventListener('click', addClipboard);
+  // LAN Send/Receive segmented control.
+  root.querySelectorAll<HTMLButtonElement>('.seg-btn').forEach((b) =>
+    b.addEventListener('click', () => {
+      const m = b.dataset.net as 'send' | 'receive';
+      if (m && m !== state.netMode) {
+        state.netMode = m;
+        render();
+      }
+    })
+  );
+  // Preserve the LAN destination across re-renders.
+  const nd = root.querySelector<HTMLInputElement>('#net-dest');
+  nd?.addEventListener('input', () => (state.netDest = nd.value));
+  // Copy buttons that carry their text inline (e.g. the receiver code).
+  root.querySelectorAll<HTMLButtonElement>('.btn-copy[data-copy]').forEach((b) =>
+    b.addEventListener('click', () => {
+      copy(b.dataset.copy || '');
+      const t = b.textContent;
+      b.textContent = 'Copied';
+      setTimeout(() => (b.textContent = t), 1200);
+    })
+  );
+  // Advanced options card open/close.
+  root.querySelector<HTMLDetailsElement>('.opt-card')?.addEventListener('toggle', (e) => {
+    state.optionsOpen = (e.target as HTMLDetailsElement).open;
+  });
   root.querySelector<HTMLButtonElement>('#apply-update')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget as HTMLButtonElement;
     btn.disabled = true;
@@ -534,7 +794,7 @@ async function signIn() {
 }
 
 async function doShare() {
-  const btn = root.querySelector<HTMLButtonElement>('#share-btn')!;
+  const btn = root.querySelector<HTMLButtonElement>('#primary-btn')!;
   btn.disabled = true;
   btn.textContent = 'Sharing…';
   try {
@@ -642,11 +902,48 @@ function setupInputListeners() {
   if (listenersReady) return;
   listenersReady = true;
   document.addEventListener('paste', onPaste);
-  (window as any).runtime?.EventsOn?.('files-dropped', (paths: string[]) => addPaths(paths || []));
+  const rt = (window as any).runtime;
+  rt?.EventsOn?.('files-dropped', (paths: string[]) => addPaths(paths || []));
+  // LAN receive progress + completion.
+  rt?.EventsOn?.('lan-recv-progress', (p: any) => {
+    state.netStatus =
+      p?.total > 0
+        ? `Receiving… ${fmtBytes(p.received)} / ${fmtBytes(p.total)}`
+        : `Receiving… ${fmtBytes(p?.received)}`;
+    const el = root.querySelector('#lan-status');
+    if (el) el.textContent = state.netStatus;
+  });
+  rt?.EventsOn?.('lan-recv-done', (d: any) => {
+    state.netReceiving = false;
+    state.netListen = null;
+    state.netStatus = '';
+    render();
+    if (d?.error) {
+      renderResults([{ path: '', ok: false, error: String(d.error) }]);
+    } else {
+      const box = root.querySelector<HTMLDivElement>('#results');
+      if (box) {
+        box.innerHTML = `<div class="res ok"><span class="res-name">${escapeHtml(
+          String(d?.name || 'file')
+        )}</span><span class="res-msg">Received → Downloads</span></div>`;
+      }
+    }
+  });
+  // LAN send progress -> primary button label.
+  rt?.EventsOn?.('lan-send-progress', (p: any) => {
+    if (state.target !== 'network' || state.netMode !== 'send') return;
+    const pct = p?.total > 0 ? Math.floor((p.sent / p.total) * 100) : 0;
+    const btn = root.querySelector<HTMLButtonElement>('#primary-btn');
+    if (btn) btn.textContent = `Sending… ${pct}%`;
+  });
+  // Re-check the clipboard when the window regains focus.
+  window.addEventListener('focus', () => {
+    checkClipboard();
+  });
 }
 
 async function onPaste(e: ClipboardEvent) {
-  if (!state.status?.loggedIn || state.view !== 'share') return;
+  if (state.view !== 'share') return;
   // Don't hijack pastes into text fields (email, password, recipients).
   if ((e.target as HTMLElement)?.closest?.('input, textarea')) return;
   const cd = e.clipboardData;

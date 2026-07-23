@@ -67,6 +67,19 @@ func prepareContent(path string) (prepared, error) {
 	}, nil
 }
 
+// PrepareLocal normalises path for a local (LAN) send, reusing the same folder
+// zipping as cloud uploads: a single file is streamed as-is; a directory is
+// zipped to a temp file first. It returns the name to advertise to the peer, the
+// byte size, whether it was a folder, the path to stream, and a cleanup func the
+// caller MUST defer (it removes any temp zip; always safe to call).
+func PrepareLocal(path string) (name string, size int64, isDir bool, readPath string, cleanup func(), err error) {
+	p, err := prepareContent(path)
+	if err != nil {
+		return "", 0, false, "", p.cleanup, err
+	}
+	return p.name, p.size, p.isFolder, p.path, p.cleanup, nil
+}
+
 // contentTypeForName guesses a MIME type from the extension, defaulting to
 // application/octet-stream.
 func contentTypeForName(name string) string {

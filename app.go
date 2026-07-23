@@ -10,11 +10,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/gen2brain/beeep"
 	"github.com/share2us/gui/internal/autostart"
+	"github.com/share2us/gui/internal/clip"
 	"github.com/share2us/gui/internal/core"
+	"github.com/share2us/gui/internal/lan"
+	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/shell"
 	"github.com/share2us/gui/internal/update"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -35,6 +40,9 @@ type App struct {
 
 	loginMu sync.Mutex
 	login   *core.LoginSession // an in-progress device-code login
+
+	lanMu   sync.Mutex
+	lanRecv *lan.Receiver // an active local-network receiver, if any
 }
 
 // NewApp constructs the app with the paths selected in Explorer (may be empty).
@@ -69,12 +77,45 @@ func (a *App) AddPasted(ext, dataB64 string) (string, error) {
 	if len(raw) > maxPasteBytes {
 		return "", errors.New("clipboard content is too large")
 	}
-	ext = sanitizeExt(ext)
+	return writeTempShare(raw, ext)
+}
+
+// ClipboardSuggestion reports shareable content currently on the OS clipboard so
+// the UI can offer a one-click chip. Kind is "none" when there is nothing
+// shareable (or on platforms without a backend clipboard read).
+func (a *App) ClipboardSuggestion() clip.Suggestion {
+	s, err := clip.Peek()
+	if err != nil {
+		return clip.Suggestion{Kind: "none"}
+	}
+	return s
+}
+
+// AddClipboard stages the current clipboard content of kind ("image"|"text") to
+// a temp file and returns its path, so a copied screenshot or snippet can be
+// shared with one click.
+func (a *App) AddClipboard(kind string) (string, error) {
+	raw, ext, err := clip.Read(kind)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) == 0 {
+		return "", errors.New("clipboard is empty")
+	}
+	if len(raw) > maxPasteBytes {
+		return "", errors.New("clipboard content is too large")
+	}
+	return writeTempShare(raw, ext)
+}
+
+// writeTempShare writes raw to a uniquely-named temp file (ext without the dot)
+// and returns its path. Shared by the browser paste path and the clipboard read.
+func writeTempShare(raw []byte, ext string) (string, error) {
 	dir, err := os.MkdirTemp("", "share2us-paste-")
 	if err != nil {
 		return "", err
 	}
-	name := "pasted-" + time.Now().Format("20060102-150405") + ext
+	name := "pasted-" + time.Now().Format("20060102-150405") + sanitizeExt(ext)
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return "", err
@@ -239,6 +280,95 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 		return ShareOutcome{Path: path, Error: err.Error()}
 	}
 	return ShareOutcome{Path: path, OK: true, Link: res.Link, PublicID: res.PublicID}
+}
+
+// ---- Local network (LAN, account-free / guest) ------------------------------
+
+// LanSend streams each path directly to a nearby receiver over the local network
+// (no account, end-to-end encrypted). dest is the receiver's code (an s2u://
+// pairing string) or a plain host / host:port; password is used only when the
+// code does not already carry one. Progress is emitted as "lan-send-progress".
+func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
+	dest = strings.TrimSpace(dest)
+	if dest == "" {
+		return failAll(paths, errors.New("enter the receiver's code or address"))
+	}
+	out := make([]ShareOutcome, 0, len(paths))
+	for _, p := range paths {
+		path := p
+		err := lan.SendOne(a.ctx, path, dest, password, func(sent, total int64) {
+			wailsRuntime.EventsEmit(a.ctx, "lan-send-progress", map[string]any{
+				"path": path, "sent": sent, "total": total,
+			})
+		})
+		if err != nil {
+			out = append(out, ShareOutcome{Path: path, Error: err.Error()})
+		} else {
+			out = append(out, ShareOutcome{Path: path, OK: true})
+		}
+	}
+	return out
+}
+
+// LanStartReceive opens a background receiver and returns the details a sender
+// needs (address, passphrase, one-paste code). It emits "lan-recv-progress" as
+// bytes arrive and "lan-recv-done" ({name,path,bytes,from} or {error}) when a
+// file lands or the receiver stops. Receiving lands files in Downloads.
+func (a *App) LanStartReceive() (lan.Listen, error) {
+	a.lanMu.Lock()
+	if a.lanRecv != nil {
+		a.lanRecv.Stop()
+	}
+	a.lanMu.Unlock()
+
+	ready := make(chan lan.Listen, 1)
+	errc := make(chan error, 1)
+	r := lan.StartReceive(a.ctx, receiver.DownloadsDir(),
+		func(l lan.Listen) {
+			select {
+			case ready <- l:
+			default:
+			}
+		},
+		func(rec, total int64) {
+			wailsRuntime.EventsEmit(a.ctx, "lan-recv-progress", map[string]any{"received": rec, "total": total})
+		},
+		func(res *lan.Result, err error) {
+			if err != nil {
+				select {
+				case errc <- err: // surfaces a pre-listen failure to the caller
+				default:
+				}
+				wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{"error": err.Error()})
+				return
+			}
+			wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
+				"name": res.Name, "path": res.Path, "bytes": res.Bytes, "from": res.From,
+			})
+			_ = beeep.Notify("Share2Us", "Received "+res.Name+" from "+res.From, "")
+		})
+	a.lanMu.Lock()
+	a.lanRecv = r
+	a.lanMu.Unlock()
+
+	select {
+	case l := <-ready:
+		return l, nil
+	case e := <-errc:
+		return lan.Listen{}, e
+	case <-time.After(8 * time.Second):
+		r.Stop()
+		return lan.Listen{}, errors.New("could not start the local receiver (is the port free?)")
+	}
+}
+
+// LanStopReceive cancels an active local-network receiver.
+func (a *App) LanStopReceive() {
+	a.lanMu.Lock()
+	r := a.lanRecv
+	a.lanRecv = nil
+	a.lanMu.Unlock()
+	r.Stop()
 }
 
 // LoginInfo is returned to the modal so it can show the code / verification page.
