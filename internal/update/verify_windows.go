@@ -6,7 +6,12 @@ import (
 	"errors"
 	"os/exec"
 	"strings"
+	"syscall"
 )
+
+// createNoWindow suppresses the console window Windows would otherwise flash when
+// a GUI (-H windowsgui) process spawns a console app like powershell.exe.
+const createNoWindow = 0x08000000 // CREATE_NO_WINDOW
 
 // VerifySignature returns nil only when path carries a Valid Authenticode
 // signature whose signer subject names Share2.us. It is FAIL-CLOSED: any error,
@@ -22,7 +27,9 @@ func VerifySignature(path string) error {
 		"$s=Get-AuthenticodeSignature -LiteralPath " + psQuote(path) + ";" +
 		"Write-Output $s.Status;" +
 		"if($s.SignerCertificate){Write-Output $s.SignerCertificate.Subject}else{Write-Output ''}"
-	out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	out, err := cmd.Output()
 	if err != nil {
 		return errors.New("could not verify the update's code signature")
 	}

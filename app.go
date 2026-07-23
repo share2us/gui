@@ -8,7 +8,6 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -871,7 +870,10 @@ func (a *App) ApplyUpdate() error {
 		if err := update.VerifySignature(path); err != nil {
 			return err
 		}
-		if err := exec.Command(path).Start(); err != nil {
+		// ShellExecute (not os/exec) so the installer's requireAdministrator
+		// manifest elevates via UAC; CreateProcess would fail with
+		// ERROR_ELEVATION_REQUIRED and the installer would never appear.
+		if err := update.LaunchInstaller(path); err != nil {
 			return err
 		}
 		wailsRuntime.Quit(a.ctx) // let the installer replace the running app
