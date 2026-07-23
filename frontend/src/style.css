@@ -58,22 +58,33 @@ body {
   color: var(--danger);
 }
 
+/* App shell: fixed header, one scrollable body, sticky footer. Only .modal-body
+   scrolls (min-height:0 lets it shrink inside the flex column so it, not the
+   page, owns the scrollbar). */
 .modal {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 14px 18px 16px;
-  gap: 12px;
+  overflow: hidden;
 }
 
 /* Header */
 .modal-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding-bottom: 10px;
+  padding: 14px 18px 10px;
   border-bottom: 1px solid var(--border);
+}
+
+/* Top-level banners (sign-in, update) sit between header and body, never scroll. */
+.modal > .banner,
+.modal > .banner-err,
+.modal > .update-bar {
+  flex: 0 0 auto;
+  margin: 12px 18px 0;
 }
 .brand {
   display: flex;
@@ -275,16 +286,17 @@ body[style*="--wails-drop-target"] .canvas {
   color: var(--accent-text);
   font-weight: 600;
 }
+/* Disabled tab ("Network — soon"): dimmed but still legible. */
 .tab:disabled {
   cursor: default;
-  opacity: 0.55;
+  opacity: 0.72;
 }
 .pill {
-  font-size: 9px;
-  background: var(--border);
-  color: var(--muted);
+  font-size: 10px;
+  background: var(--surface-2);
+  color: var(--text);
   border-radius: 4px;
-  padding: 1px 4px;
+  padding: 1px 5px;
   vertical-align: middle;
 }
 
@@ -295,8 +307,10 @@ body[style*="--wails-drop-target"] .canvas {
   padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-height: 132px;
+  gap: 14px;
+  /* Content-driven height (no fixed height); just enough to not collapse when
+     a tab has a single line of content. */
+  min-height: 0;
   box-shadow: var(--shadow);
 }
 .soon-note {
@@ -304,17 +318,19 @@ body[style*="--wails-drop-target"] .canvas {
   font-size: 13px;
 }
 
+/* Field group: label sits directly above its input, visually attached. */
 .fld {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  font-size: 12.5px;
+  gap: 6px;
+  font-size: 13px;
   color: var(--muted);
 }
 .hint {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 400;
+  line-height: 1.4;
 }
 input[type="text"],
 input[type="password"],
@@ -332,16 +348,44 @@ input:focus,
 select:focus {
   border-color: var(--accent);
 }
-.chk {
+/* Checkbox row: checkbox is a fixed, non-shrinking box top-aligned to the first
+   line of a (possibly wrapping) label. Secondary explanations go in a separate
+   .setting-help block, not mixed into the label text. */
+.setting-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  min-height: 24px;
   font-size: 13px;
+  line-height: 1.45;
   color: var(--text);
   cursor: pointer;
 }
-.chk input {
+.setting-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
   accent-color: var(--accent);
+}
+.setting-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.setting-help {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+/* Disabled row stays readable but is clearly muted and non-interactive. */
+.setting-row.is-disabled {
+  cursor: default;
+}
+.setting-row.is-disabled .setting-label {
+  color: var(--muted);
 }
 
 /* Results */
@@ -349,6 +393,10 @@ select:focus {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+/* Empty results must not consume a flex gap (avoids a phantom blank row). */
+.results:empty {
+  display: none;
 }
 .res {
   background: var(--surface);
@@ -392,21 +440,29 @@ select:focus {
   border-color: var(--accent);
 }
 
-/* Settings */
+/* Settings: a section heading + top divider (the divider is a border above the
+   whole section, with padding before the heading so it never crosses the text)
+   and a gap-spaced body. Kept as <details> so the collapse behaviour is
+   unchanged. */
 .settings {
   border-top: 1px solid var(--border);
-  padding-top: 8px;
-  font-size: 12.5px;
+  padding-top: 14px;
 }
-.settings summary {
+.settings-summary {
   color: var(--muted);
   cursor: pointer;
   user-select: none;
-  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 2px 0;
 }
-.settings .chk {
-  font-size: 12.5px;
-  margin: 4px 0;
+.settings[open] .settings-summary {
+  margin-bottom: 12px;
+}
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .modal-body {
@@ -415,12 +471,31 @@ select:focus {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  /* Generous bottom padding so the last field clears the sticky footer. */
+  padding: 14px 18px 24px;
+}
+/* Critical: keep each block at its natural height. Without this the flex column
+   shrinks its children under height pressure, so their contents overflow their
+   boxes and overlap the next block (the password input spilling onto Settings).
+   flex:0 0 auto makes .modal-body scroll instead of compressing. */
+.modal-body > * {
+  flex: 0 0 auto;
 }
 .modal-foot {
-  flex: none;
-  padding-top: 12px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 18px;
+  background: var(--surface);
   border-top: 1px solid var(--border);
+}
+.foot-reason {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: center;
 }
 .btn-primary {
   width: 100%;
@@ -438,6 +513,6 @@ select:focus {
   background: var(--accent-hover);
 }
 .btn-primary:disabled {
-  opacity: 0.45;
-  cursor: default;
+  opacity: 0.5;
+  cursor: not-allowed;
 }

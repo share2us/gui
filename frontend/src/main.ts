@@ -188,7 +188,10 @@ function renderShare() {
         ${settingsBlock()}
       </div>
       <footer class="modal-foot">
-        <button class="btn-primary" id="share-btn" ${canShare() ? '' : 'disabled'}>Share</button>
+        ${canShare() ? '' : `<div class="foot-reason">${escapeHtml(shareDisabledReason())}</div>`}
+        <button class="btn-primary" id="share-btn" ${
+          canShare() ? '' : `disabled title="${escapeHtml(shareDisabledReason())}"`
+        }>Share</button>
       </footer>
     </div>`;
   wire();
@@ -330,7 +333,7 @@ function passwordRow(): string {
 }
 
 function checkRow(id: string, label: string): string {
-  return `<label class="chk"><input type="checkbox" id="${id}" /> ${label}</label>`;
+  return `<label class="setting-row"><input type="checkbox" id="${id}" /><span class="setting-label">${label}</span></label>`;
 }
 
 function settingsBlock(): string {
@@ -339,12 +342,14 @@ function settingsBlock(): string {
   const autoChk = s.autostartEnabled ? 'checked' : '';
   const autoDis = s.canReceive ? '' : 'disabled';
   return `<details class="settings"${state.settingsOpen ? ' open' : ''}>
-    <summary>Settings</summary>
-    <label class="chk"><input type="checkbox" id="set-shell" ${shellChk} /> Right-click Share menu</label>
-    <label class="chk"><input type="checkbox" id="set-autostart" ${autoChk} ${autoDis} /> Auto-receive files at login${
-      s.canReceive ? '' : ' <span class="hint">(sign in to enable)</span>'
-    }</label>
-    ${s.loggedIn ? `<button class="btn-mini" id="open-trust">Manage who can send to my devices →</button>` : ''}
+    <summary class="settings-summary">Settings</summary>
+    <div class="settings-body">
+      <label class="setting-row"><input type="checkbox" id="set-shell" ${shellChk} /><span class="setting-label">Right-click Share menu</span></label>
+      <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${autoChk} ${autoDis} /><span class="setting-label">Auto-receive files at login${
+        s.canReceive ? '' : '<span class="setting-help">Sign in to enable this.</span>'
+      }</span></label>
+      ${s.loggedIn ? `<button class="btn-mini" id="open-trust">Manage who can send to my devices →</button>` : ''}
+    </div>
   </details>`;
 }
 
@@ -380,16 +385,25 @@ function trustDeviceList(): string {
     .map((d) => {
       const dis = d.hasKey ? '' : 'disabled';
       const cur = d.current ? ' (this device)' : '';
-      const noKey = d.hasKey ? '' : ' <span class="hint">no key</span>';
-      return `<label class="chk"><input type="checkbox" class="trust-dev" data-id="${d.sessionId}" ${
+      const noKey = d.hasKey ? '' : '<span class="setting-help">No key yet.</span>';
+      return `<label class="setting-row${d.hasKey ? '' : ' is-disabled'}"><input type="checkbox" class="trust-dev" data-id="${d.sessionId}" ${
         d.exposed ? 'checked' : ''
-      } ${dis} /> ${escapeHtml(d.label)}${cur}${noKey}</label>`;
+      } ${dis} /><span class="setting-label">${escapeHtml(d.label)}${cur}${noKey}</span></label>`;
     })
     .join('');
 }
 
 function canShare(): boolean {
   return !!state.status?.loggedIn && state.paths.length > 0 && state.target !== 'network';
+}
+
+// shareDisabledReason explains, in the footer, why Share is disabled so the
+// control isn't a dead end. Order mirrors canShare()'s checks.
+function shareDisabledReason(): string {
+  if (!state.status?.loggedIn) return 'Sign in to share.';
+  if (state.paths.length === 0) return 'Add a file — drop or paste one above — to share.';
+  if (state.target === 'network') return 'Network sharing is coming soon.';
+  return '';
 }
 
 function wire() {
