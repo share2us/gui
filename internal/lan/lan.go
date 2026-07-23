@@ -15,6 +15,7 @@ import (
 
 	"github.com/share2us/cli-core/lanshare"
 	"github.com/share2us/gui/internal/core"
+	"github.com/share2us/gui/internal/lanid"
 )
 
 // Listen is what a sender needs to reach this receiver, surfaced to the UI.
@@ -52,6 +53,13 @@ func SendOne(ctx context.Context, path, dest, password string, onProgress func(s
 	defer f.Close()
 
 	opts := lanshare.SendOptions{Dest: dest, Password: password, OnProgress: onProgress}
+	// Attach this device's identity so the receiver can recognise / trust it.
+	if id, ierr := lanid.Identity(); ierr == nil {
+		opts.Identity = id
+		if host, herr := os.Hostname(); herr == nil {
+			opts.SenderName = host
+		}
+	}
 	if lanshare.IsPairingString(dest) {
 		pi, perr := lanshare.ParsePairingString(dest)
 		if perr != nil {
@@ -152,11 +160,17 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
 }
 
 // Request is an inbound transfer awaiting the user's accept/reject decision.
+// Fingerprint is the sender's verified identity key fingerprint ("" if the
+// sender is anonymous) — the trust key; SenderName is a cosmetic label; Code is
+// the 6-digit verify code for that fingerprint.
 type Request struct {
-	From  string `json:"from"`
-	Name  string `json:"name"`
-	Size  int64  `json:"size"`
-	IsDir bool   `json:"isDir"`
+	From        string `json:"from"`
+	Name        string `json:"name"`
+	Size        int64  `json:"size"`
+	IsDir       bool   `json:"isDir"`
+	Fingerprint string `json:"fingerprint"`
+	SenderName  string `json:"senderName"`
+	Code        string `json:"code"`
 }
 
 // Serve runs a persistent, discoverable receiver: it advertises under name,
@@ -188,7 +202,11 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 				}
 			},
 			OnRequest: func(r lanshare.RequestInfo) bool {
-				return approve(Request{From: firstNonEmpty(r.PeerIP, "a nearby device"), Name: r.Name, Size: r.Size, IsDir: r.IsDir})
+				fp := lanshare.IdentityFingerprint(r.SenderKey)
+				return approve(Request{
+					From: firstNonEmpty(r.PeerIP, "a nearby device"), Name: r.Name, Size: r.Size, IsDir: r.IsDir,
+					Fingerprint: fp, SenderName: r.SenderName, Code: lanshare.VerifyCode(fp),
+				})
 			},
 			OnReceived: func(res lanshare.ReceiveResult) {
 				if onReceived != nil {

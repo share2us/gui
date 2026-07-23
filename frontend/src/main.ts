@@ -59,7 +59,17 @@ type DeviceAccess = {
 };
 type LanListen = { address: string; port: number; passphrase: string; pairing: string; destDir: string };
 type LanPeer = { name: string; addr: string; dest: string; code: string; mode: string };
-type LanRequest = { id: string; from: string; name: string; size: number };
+type LanRequest = {
+  id: string;
+  from: string;
+  name: string;
+  size: number;
+  fingerprint: string;
+  senderName: string;
+  code: string;
+  trusted: boolean;
+};
+type TrustedDevice = { fingerprint: string; name: string; mode: string };
 type ClipSuggestion = { kind: 'image' | 'text' | 'none'; preview: string; ext: string };
 
 interface AppBackend {
@@ -84,6 +94,9 @@ interface AppBackend {
   LanBrowse(): Promise<LanPeer[]>;
   SetDiscoverable(on: boolean): Promise<void>;
   RespondLanRequest(id: string, accept: boolean): Promise<void>;
+  TrustDevice(fingerprint: string, name: string, mode: string): Promise<void>;
+  UntrustDevice(fingerprint: string): Promise<void>;
+  ListTrusted(): Promise<TrustedDevice[]>;
   ClipboardSuggestion(): Promise<ClipSuggestion>;
   AddClipboard(kind: string): Promise<string>;
 }
@@ -119,6 +132,7 @@ const state = {
   requests: [] as LanRequest[],
   discCode: '' as string,
   discAddr: '' as string,
+  trusted: [] as TrustedDevice[],
   // Clipboard suggestion (Windows backend read).
   clip: null as ClipSuggestion | null,
 };
@@ -173,6 +187,7 @@ async function boot() {
     setupInputListeners();
     checkForUpdate();
     checkClipboard();
+    loadTrusted();
   } catch (e) {
     root.innerHTML = `<div class="error-box">Could not start: ${escapeHtml(String(e))}</div>`;
   }
@@ -242,21 +257,51 @@ function discoverableBanner(): string {
   return `<div class="disc-bar">📡 Discoverable — nearby devices can send you files. ${code}</div>`;
 }
 
-// requestOverlay is the accept/reject prompt shown when a nearby device wants to
-// send us a file (only while Discoverable). Nothing lands until the user accepts.
+// requestOverlay is the accept/reject prompt shown when a device wants to send us
+// a file (only while Discoverable). Nothing lands until the user accepts. An
+// untrusted authenticated sender can be trusted here (by its key) so future
+// transfers skip the code.
 function requestOverlay(r: LanRequest): string {
-  return `<div class="overlay">
-    <div class="overlay-card">
-      <div class="overlay-title">Incoming file</div>
-      <div class="overlay-body"><b>${escapeHtml(r.name)}</b> <span class="hint">(${fmtBytes(r.size)})</span>
-        <div class="hint">from ${escapeHtml(r.from)}</div>
-      </div>
+  const who = escapeHtml(r.senderName || r.from);
+  const size = fmtBytes(r.size);
+  if (r.trusted) {
+    return `<div class="overlay"><div class="overlay-card">
+      <div class="overlay-title">Incoming file <span class="trust-badge">Trusted</span></div>
+      <div class="overlay-body"><b>${escapeHtml(r.name)}</b> <span class="hint">(${size})</span>
+        <div class="hint">from ${who}</div></div>
       <div class="overlay-actions">
         <button class="btn-hdr" id="req-reject">Decline</button>
         <button class="btn-accept" id="req-accept">Accept → Downloads</button>
       </div>
+    </div></div>`;
+  }
+  const trustBox = r.fingerprint
+    ? `<label class="chk-trust"><input type="checkbox" id="req-trust" /> Trust this device
+         <select id="req-trust-mode" disabled>
+           <option value="ask">ask each time</option>
+           <option value="auto">auto-accept</option>
+         </select></label>
+       ${r.code ? `<div class="hint">Device code <b>${escapeHtml(r.code)}</b> — confirm it matches their screen before trusting.</div>` : ''}`
+    : `<div class="hint">This sender has no verified identity — can't be trusted.</div>`;
+  return `<div class="overlay"><div class="overlay-card">
+    <div class="overlay-title">Incoming file</div>
+    <div class="overlay-body"><b>${escapeHtml(r.name)}</b> <span class="hint">(${size})</span>
+      <div class="hint">from ${who} · ${escapeHtml(r.from)}</div></div>
+    ${trustBox}
+    <div class="overlay-actions">
+      <button class="btn-hdr" id="req-reject">Decline</button>
+      <button class="btn-accept" id="req-accept">Accept</button>
     </div>
-  </div>`;
+  </div></div>`;
+}
+
+async function loadTrusted() {
+  try {
+    state.trusted = (await backend().ListTrusted()) || [];
+    render();
+  } catch {
+    /* ignore */
+  }
 }
 
 function updateBanner(): string {
@@ -503,9 +548,31 @@ function settingsBlock(): string {
       <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${autoChk} ${autoDis} /><span class="setting-label">Auto-receive files at login${
         s.canReceive ? '' : '<span class="setting-help">Sign in to enable this.</span>'
       }</span></label>
+      ${trustedBlock()}
       ${s.loggedIn ? `<button class="btn-mini" id="open-trust">Manage who can send to my devices →</button>` : ''}
     </div>
   </details>`;
+}
+
+// trustedBlock lists the receiver's trusted LAN devices with a per-device mode
+// and a revoke, so trust stays under the receiver's control.
+function trustedBlock(): string {
+  if (!state.trusted.length) return '';
+  return `<div class="trusted-list">
+    <div class="setting-label">Trusted devices <span class="hint">send you files without a code</span></div>
+    ${state.trusted
+      .map(
+        (d) => `<div class="trusted-row">
+      <span class="trusted-name" title="${escapeHtml(d.fingerprint)}">${escapeHtml(d.name || d.fingerprint.slice(0, 10))}</span>
+      <select class="trusted-mode" data-fp="${escapeHtml(d.fingerprint)}">
+        <option value="ask" ${d.mode !== 'auto' ? 'selected' : ''}>ask each time</option>
+        <option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>auto-accept</option>
+      </select>
+      <button class="btn-mini trusted-revoke" data-fp="${escapeHtml(d.fingerprint)}">Revoke</button>
+    </div>`
+      )
+      .join('')}
+  </div>`;
 }
 
 function renderTrust() {
@@ -813,9 +880,49 @@ function wire() {
   root.querySelectorAll<HTMLButtonElement>('.peer-row').forEach((b) =>
     b.addEventListener('click', () => lanSendTo(b.dataset.dest || ''))
   );
-  // Incoming-request approval.
-  root.querySelector<HTMLButtonElement>('#req-accept')?.addEventListener('click', () => respondRequest(true));
+  // Incoming-request approval (with optional "Accept & trust").
   root.querySelector<HTMLButtonElement>('#req-reject')?.addEventListener('click', () => respondRequest(false));
+  root.querySelector<HTMLInputElement>('#req-trust')?.addEventListener('change', (e) => {
+    const m = root.querySelector<HTMLSelectElement>('#req-trust-mode');
+    if (m) m.disabled = !(e.target as HTMLInputElement).checked;
+  });
+  root.querySelector<HTMLButtonElement>('#req-accept')?.addEventListener('click', async () => {
+    const r = state.requests[0];
+    const trustEl = root.querySelector<HTMLInputElement>('#req-trust');
+    const modeEl = root.querySelector<HTMLSelectElement>('#req-trust-mode');
+    if (r && trustEl?.checked && r.fingerprint) {
+      try {
+        await backend().TrustDevice(r.fingerprint, r.senderName || r.from, modeEl?.value || 'ask');
+      } catch {
+        /* ignore */
+      }
+      loadTrusted();
+    }
+    respondRequest(true);
+  });
+  // Trusted-devices management (Settings).
+  root.querySelectorAll<HTMLSelectElement>('.trusted-mode').forEach((sel) =>
+    sel.addEventListener('change', async () => {
+      const fp = sel.dataset.fp || '';
+      const d = state.trusted.find((x) => x.fingerprint === fp);
+      try {
+        await backend().TrustDevice(fp, d?.name || '', sel.value);
+      } catch {
+        /* ignore */
+      }
+      loadTrusted();
+    })
+  );
+  root.querySelectorAll<HTMLButtonElement>('.trusted-revoke').forEach((b) =>
+    b.addEventListener('click', async () => {
+      try {
+        await backend().UntrustDevice(b.dataset.fp || '');
+      } catch {
+        /* ignore */
+      }
+      loadTrusted();
+    })
+  );
   // Discoverable toggle (account-free; available to everyone).
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
   disc?.addEventListener('change', async () => {
@@ -1079,7 +1186,16 @@ function setupInputListeners() {
   // can't overwrite/race the modal; the head is shown, the rest wait.
   rt?.EventsOn?.('lan-request', (r: any) => {
     if (!r?.id) return;
-    state.requests.push({ id: String(r.id), from: String(r.from || ''), name: String(r.name || 'file'), size: Number(r.size) || 0 });
+    state.requests.push({
+      id: String(r.id),
+      from: String(r.from || ''),
+      name: String(r.name || 'file'),
+      size: Number(r.size) || 0,
+      fingerprint: String(r.fingerprint || ''),
+      senderName: String(r.senderName || ''),
+      code: String(r.code || ''),
+      trusted: !!r.trusted,
+    });
     if (state.view !== 'share') state.view = 'share';
     render();
   });

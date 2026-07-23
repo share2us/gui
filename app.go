@@ -21,6 +21,7 @@ import (
 	"github.com/share2us/gui/internal/clip"
 	"github.com/share2us/gui/internal/core"
 	"github.com/share2us/gui/internal/lan"
+	"github.com/share2us/gui/internal/lanid"
 	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/shell"
 	"github.com/share2us/gui/internal/update"
@@ -462,19 +463,29 @@ func (a *App) SetDiscoverable(on bool) error {
 	return nil
 }
 
-// approveRequest raises a "lan-request" prompt in the UI and waits for
-// RespondLanRequest (or a timeout → reject). It runs concurrently (one goroutine
-// per inbound connection) and enforces anti-spam limits so a peer can't flood the
-// receiver with prompts: a per-IP cap, a global cap, and a post-decline cooldown.
-// Requests over the limits are auto-rejected without ever showing a prompt.
+// approveRequest decides an inbound transfer. A device the receiver has trusted
+// (by its verified key fingerprint) bypasses the verify code and the anti-spam
+// caps: "auto" trust lands silently, "ask" trust still prompts (labelled
+// trusted). An untrusted / anonymous sender is subject to the anti-spam limits
+// (per-IP cap, global cap, post-decline cooldown) and then the normal prompt,
+// which also offers "Accept & trust". Runs concurrently (one goroutine per
+// inbound connection).
 func (a *App) approveRequest(r lan.Request) bool {
+	if r.Fingerprint != "" {
+		if td, ok := lanid.Lookup(r.Fingerprint); ok {
+			if td.Mode == "auto" {
+				return true // trusted + auto: lands silently; OnReceived toasts + logs
+			}
+			return a.promptApproval(r, true) // trusted + ask: prompt, no caps
+		}
+	}
+
+	// Untrusted / anonymous: enforce anti-spam limits before prompting.
 	a.discMu.Lock()
-	if a.reqs == nil {
-		a.reqs = make(map[string]chan bool)
+	if a.pendingByIP == nil {
 		a.pendingByIP = make(map[string]int)
 		a.cooldown = make(map[string]time.Time)
 	}
-	// Cooldown: a recently-declined IP is silently rejected for a window.
 	if until, ok := a.cooldown[r.From]; ok {
 		if time.Now().Before(until) {
 			a.discMu.Unlock()
@@ -482,32 +493,17 @@ func (a *App) approveRequest(r lan.Request) bool {
 		}
 		delete(a.cooldown, r.From)
 	}
-	// Caps: bound prompts per IP and overall.
 	if a.pendingByIP[r.From] >= maxPendingPerIP || a.pendingTotal >= maxPendingTotal {
 		a.discMu.Unlock()
 		return false
 	}
-	a.reqSeq++
-	id := "req" + strconv.FormatUint(a.reqSeq, 10)
-	ch := make(chan bool, 1)
-	a.reqs[id] = ch
 	a.pendingByIP[r.From]++
 	a.pendingTotal++
 	a.discMu.Unlock()
 
-	wailsRuntime.EventsEmit(a.ctx, "lan-request", map[string]any{
-		"id": id, "from": r.From, "name": r.Name, "size": r.Size,
-	})
-
-	ok := false
-	select {
-	case ok = <-ch:
-	case <-time.After(approvalWaitLimit):
-	case <-a.ctx.Done():
-	}
+	ok := a.promptApproval(r, false)
 
 	a.discMu.Lock()
-	delete(a.reqs, id)
 	if a.pendingByIP[r.From] > 0 {
 		a.pendingByIP[r.From]--
 		if a.pendingByIP[r.From] == 0 {
@@ -522,6 +518,55 @@ func (a *App) approveRequest(r lan.Request) bool {
 	}
 	a.discMu.Unlock()
 	return ok
+}
+
+// promptApproval raises a "lan-request" prompt and blocks until RespondLanRequest
+// (or a timeout / shutdown). trusted marks the prompt as coming from an
+// already-trusted device in the UI.
+func (a *App) promptApproval(r lan.Request, trusted bool) bool {
+	a.discMu.Lock()
+	if a.reqs == nil {
+		a.reqs = make(map[string]chan bool)
+	}
+	a.reqSeq++
+	id := "req" + strconv.FormatUint(a.reqSeq, 10)
+	ch := make(chan bool, 1)
+	a.reqs[id] = ch
+	a.discMu.Unlock()
+
+	wailsRuntime.EventsEmit(a.ctx, "lan-request", map[string]any{
+		"id": id, "from": r.From, "name": r.Name, "size": r.Size,
+		"fingerprint": r.Fingerprint, "senderName": r.SenderName, "code": r.Code, "trusted": trusted,
+	})
+
+	ok := false
+	select {
+	case ok = <-ch:
+	case <-time.After(approvalWaitLimit):
+	case <-a.ctx.Done():
+	}
+
+	a.discMu.Lock()
+	delete(a.reqs, id)
+	a.discMu.Unlock()
+	return ok
+}
+
+// TrustDevice adds a sender (by verified key fingerprint) to the trusted list
+// with a mode ("ask" or "auto"). Called from the approval prompt's
+// "Accept & trust".
+func (a *App) TrustDevice(fingerprint, name, mode string) error {
+	return lanid.Trust(fingerprint, name, mode)
+}
+
+// UntrustDevice revokes trust for a device.
+func (a *App) UntrustDevice(fingerprint string) error {
+	return lanid.Untrust(fingerprint)
+}
+
+// ListTrusted returns the trusted devices for the Settings management list.
+func (a *App) ListTrusted() []lanid.TrustedDevice {
+	return lanid.List()
 }
 
 // RespondLanRequest answers a pending "lan-request" prompt (accept or reject).

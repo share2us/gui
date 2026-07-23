@@ -834,3 +834,63 @@ select:focus {
   padding: 1px 7px;
   letter-spacing: 0.5px;
 }
+
+/* ── Trusted devices (LAN identity) ────────────────────────────────────── */
+.trust-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+  background: var(--accent);
+  border-radius: 5px;
+  padding: 2px 7px;
+  vertical-align: middle;
+}
+.chk-trust {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.chk-trust select {
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.trusted-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.trusted-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.trusted-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trusted-mode {
+  flex: none;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.trusted-revoke {
+  flex: none;
+  background: var(--surface-2);
+  color: var(--danger);
+  border: 1px solid var(--border);
+}
+.trusted-revoke:hover {
+  border-color: var(--danger);
+}
