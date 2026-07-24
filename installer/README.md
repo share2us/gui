@@ -1,5 +1,11 @@
 # Installers
 
+> **Distribution & the Chrome/Defender "virus" flag:** see
+> [`DISTRIBUTION.md`](DISTRIBUTION.md). TL;DR — the installer no longer trusts a
+> self-signed cert into the root store (that was the malware-pattern trigger);
+> the Share-sheet MSIX moves to the Microsoft Store, with winget as a secondary
+> channel.
+
 ## Component model
 
 One installer, user picks what to install:

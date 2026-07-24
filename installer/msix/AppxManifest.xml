@@ -6,7 +6,15 @@
   "Share", etc.) for images, files, and text.
 
   Version is stamped at build time (see the release workflow's installer job,
-  which builds + signs this MSIX with the same cert as Setup.exe and bundles it).
+  which builds this MSIX and publishes it as a standalone asset).
+
+  DISTRIBUTION = Microsoft Store. Setup.exe no longer sideloads this MSIX (that
+  required trusting a self-signed cert into LocalMachine\Root — a malware pattern
+  that got flagged; see installer/DISTRIBUTION.md). Before Store submission, the
+  Identity below (Name + Publisher) MUST be replaced with the values Partner
+  Center assigns to the reserved app (Product identity page): e.g.
+  Name="<StoreReservedName>", Publisher="CN=<your-store-publisher-id>". The Store
+  then re-signs the package with a trusted cert.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -14,6 +22,8 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap rescap">
 
+  <!-- Placeholder identity for local dev builds; overwritten with the Store-
+       assigned identity for submission (see the file header). -->
   <Identity
     Name="Share2.us.Share2Us"
     Publisher="CN=Share2.us, O=Share2.us"
