@@ -72,11 +72,12 @@ const maxActivity = 200
 // ActivityEntry is one logged transfer/broadcast event. Metadata only — never
 // file contents.
 type ActivityEntry struct {
-	Kind string `json:"kind"` // sent | received | downloaded | broadcast
+	Kind string `json:"kind"` // sent | received | downloaded | broadcast | link
 	Peer string `json:"peer"`
 	Name string `json:"name"`
 	Size int64  `json:"size"`
-	TS   int64  `json:"ts"` // unix seconds
+	Link string `json:"link,omitempty"` // for kind "link": the share URL (re-copyable)
+	TS   int64  `json:"ts"`             // unix seconds
 }
 
 var actMu sync.Mutex

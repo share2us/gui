@@ -327,6 +327,20 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 	if err != nil {
 		return ShareOutcome{Path: path, Error: err.Error()}
 	}
+	// Record the share in the activity log (metadata only). Cloud link shares
+	// keep the URL so the home feed can re-copy it.
+	var sz int64
+	if fi, serr := os.Stat(path); serr == nil {
+		sz = fi.Size()
+	}
+	switch req.Target {
+	case "public":
+		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "link", Name: filepath.Base(path), Size: sz, Peer: "public link", Link: res.Link})
+	case "private":
+		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "link", Name: filepath.Base(path), Size: sz, Peer: "private link", Link: res.Link})
+	case "device", "contact":
+		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "sent", Name: filepath.Base(path), Size: sz, Peer: firstNonEmptyStr(req.Email, "a device")})
+	}
 	return ShareOutcome{Path: path, OK: true, Link: res.Link, PublicID: res.PublicID}
 }
 

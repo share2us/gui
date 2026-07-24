@@ -31,7 +31,7 @@ type LanPeer = {
 type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string };
 type TrustedDevice = { fingerprint: string; name: string };
 type ClipSuggestion = { kind: 'image' | 'text' | 'none'; preview: string; ext: string };
-type Activity = { kind: string; peer: string; name: string; size: number; ts: number };
+type Activity = { kind: string; peer: string; name: string; size: number; ts: number; link?: string };
 type BcConn = { fingerprint: string; name: string; peer: string; sent: number; total: number; done: boolean; err: string };
 type BroadcastState = { active: boolean; name: string; size: number; access: string; downloading: BcConn[]; completed: BcConn[] };
 type DownloadResult = { name: string; fingerprint: string; from: string; trusted: boolean };
@@ -97,6 +97,8 @@ const state = {
   loginError: '' as string,
   // download confirm overlay
   dl: null as (LanPeer & { trust?: boolean }) | null,
+  // cloud share result (persistent copyable link)
+  shareResult: null as { name: string; link: string; kind: string } | null,
 };
 
 const BRAND_SVG =
@@ -179,6 +181,7 @@ function renderHome(): void {
     </div>
     ${state.requests.length ? requestOverlay(state.requests[0]) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
+    ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
   </div>`;
   wire();
 }
@@ -229,12 +232,29 @@ function liveRow(bc: BroadcastState): string {
 }
 
 function logRow(a: Activity): string {
+  if (a.kind === 'link') {
+    return `<div class="item log">
+      <div class="ico done">🔗</div>
+      <div class="line">Shared <b>${escapeHtml(a.name)}</b> <span class="meta">· ${escapeHtml(a.peer)} · ${ago(a.ts)}</span></div>
+      ${a.link ? `<div class="acts"><button class="ib copy-link" data-link="${escapeHtml(a.link)}" title="Copy link">⧉</button></div>` : ''}
+    </div>`;
+  }
   const verb: Record<string, string> = { sent: 'Sent', received: 'Received', downloaded: 'Downloaded', broadcast: 'Broadcast to' };
   const who = a.peer ? ` ${a.kind === 'sent' ? 'to' : a.kind === 'broadcast' ? '' : 'from'} ${escapeHtml(a.peer)}` : '';
   return `<div class="item log">
     <div class="ico done">✓</div>
     <div class="line">${verb[a.kind] || a.kind} <b>${escapeHtml(a.name)}</b>${who} <span class="meta">· ${ago(a.ts)}</span></div>
   </div>`;
+}
+
+function shareResultOverlay(r: { name: string; link: string; kind: string }): string {
+  const title = r.kind === 'private' ? 'Private link ready' : 'Public link ready';
+  return `<div class="overlay"><div class="overlay-card">
+    <div class="overlay-title">${title}</div>
+    <div class="overlay-body"><b>${escapeHtml(r.name)}</b> is shared. The link is on your clipboard:</div>
+    <input class="link-field" id="share-link" type="text" readonly value="${escapeHtml(r.link)}" />
+    <div class="overlay-actions"><button class="btn-hdr" id="share-done">Done</button><button class="btn-accept" id="share-copy">Copy link</button></div>
+  </div></div>`;
 }
 
 // ---- Share modal -----------------------------------------------------------
@@ -470,14 +490,21 @@ async function doShare() {
   req.oneTime = checked('one-time');
   req.note = val('note') || undefined;
   if (state.dest === 'private') req.recipients = val('recipients').split(',').map((x) => x.trim()).filter(Boolean);
+  const kind = state.dest;
+  const name = basename(state.paths[0] || '');
   const btn = root.querySelector<HTMLButtonElement>('#primary-btn')!;
   btn.disabled = true; btn.textContent = 'Sharing…';
   try {
     const out = await backend().Share(req);
+    const failed = out.find((o) => !o.ok);
+    if (failed) { btn.disabled = false; btn.textContent = primaryLabel(); toast(failed.error || 'Share failed'); return; }
     const link = out.find((o) => o.ok && o.link)?.link;
-    if (link) { copy(link); toast('Link copied to clipboard'); }
     state.view = 'home'; state.paths = [];
-    await refreshActivity(); render();
+    await refreshActivity();
+    // Keep the link visible + on the clipboard instead of silently closing.
+    if (link) { copy(link); state.shareResult = { name, link, kind }; }
+    else { toast('Shared'); }
+    render();
   } catch (e) { btn.disabled = false; btn.textContent = primaryLabel(); toast(String(e)); }
 }
 
@@ -567,6 +594,14 @@ function wire() {
   // download confirm overlay
   root.querySelector('#dl-cancel')?.addEventListener('click', () => { state.dl = null; render(); });
   root.querySelector('#dl-go')?.addEventListener('click', doDownload);
+  // share-result overlay (persistent copyable link)
+  root.querySelector('#share-done')?.addEventListener('click', () => { state.shareResult = null; render(); });
+  root.querySelector('#share-copy')?.addEventListener('click', () => {
+    const f = root.querySelector<HTMLInputElement>('#share-link');
+    if (f) { f.select(); copy(f.value); toast('Link copied'); }
+  });
+  root.querySelector<HTMLInputElement>('#share-link')?.addEventListener('focus', (e) => (e.currentTarget as HTMLInputElement).select());
+  on('.copy-link', 'click', (e) => { copy((e.currentTarget as HTMLElement).dataset.link || ''); toast('Link copied'); });
   // settings
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
   disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) state.discCode = ''; render(); } catch { disc.checked = !disc.checked; } });
