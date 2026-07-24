@@ -385,8 +385,13 @@ function updateBanner(): string {
   return `<div class="update-bar"><span>Update available — <strong>v${escapeHtml(u.latest)}</strong></span><button class="btn-mini" id="apply-update">Install</button></div>`;
 }
 function loginProgress(): string {
-  if (state.loginPhase === 'waiting' && state.loginInfo) {
+  if (state.loginPhase === 'waiting') {
     const info = state.loginInfo;
+    if (!info) {
+      // Show feedback immediately, before BeginLogin returns, so a slow or
+      // unreachable sign-in server never looks like "nothing happened".
+      return `<div class="banner">Starting sign-in… <span class="hint">opening your browser</span></div>`;
+    }
     return `<div class="banner">Approve this device in your browser${info.userCode ? ` — code <code>${escapeHtml(info.userCode)}</code>` : ''}. <span class="hint">Waiting…</span>${info.verificationUrl ? `<button class="btn-mini" id="reopen-login">Reopen page</button>` : ''}</div>`;
   }
   if (state.loginPhase === 'error' && state.loginError) return `<div class="banner-err">${escapeHtml(state.loginError)}</div>`;
@@ -627,15 +632,30 @@ async function respondRequest(accept: boolean) {
   if (r) { try { await backend().RespondLanRequest(r.id, accept); } catch { /* */ } }
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
+}
 async function signIn() {
-  state.loginPhase = 'waiting'; state.loginError = '';
+  state.loginPhase = 'waiting'; state.loginError = ''; state.loginInfo = null; render();
   try {
-    state.loginInfo = await backend().BeginLogin(); render();
+    // Bound BeginLogin: if the sign-in server is unreachable this fails visibly
+    // instead of hanging silently. (CompleteLogin is NOT bounded — it waits for
+    // the user to approve in the browser, up to the backend's 10-minute window.)
+    state.loginInfo = await withTimeout(backend().BeginLogin(), 20000, 'Could not reach the sign-in server. Check your connection and try again.');
+    render();
     state.status = await backend().CompleteLogin();
     state.loginPhase = 'idle'; state.loginInfo = null; render();
-  } catch (e) { state.loginPhase = 'error'; state.loginError = String(e); state.loginInfo = null; render(); }
+  } catch (e) { state.loginPhase = 'error'; state.loginError = String(e).replace(/^Error:\s*/, ''); state.loginInfo = null; render(); }
 }
-async function logout() { try { await backend().Logout(); } catch { /* */ } try { state.status = await backend().Status(); } catch { /* */ } state.view = 'home'; render(); }
+async function logout() {
+  let err: unknown = null;
+  try { await backend().Logout(); } catch (e) { err = e; }
+  try { state.status = await backend().Status(); } catch { /* */ }
+  state.view = 'home'; render();
+  if (err) toast('Logout failed: ' + String(err));
+  else if (state.status?.loggedIn) toast('Could not clear the session — please try again');
+  else toast('Signed out');
+}
 
 async function applyUpdate(e: Event) {
   const btn = e.currentTarget as HTMLButtonElement; btn.disabled = true; btn.textContent = 'Updating…';
