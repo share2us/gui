@@ -64,8 +64,13 @@ Name: "custom"; Description: "Custom"; Flags: iscustom
 Name: "gui"; Description: "Share2Us app — right-click ""s2u -> Share"" in Explorer"; Types: full custom
 Name: "cli"; Description: "s2u command-line tool — adds ""s2u"" to your PATH"; Types: full custom
 
+; NOTE: the Windows "Share" sheet integration (the MSIX) is intentionally NOT
+; installed here. It used to be sideloaded by trusting a bundled self-signed cert
+; into LocalMachine\Root — but "an installer adds a root CA certificate" is a
+; textbook malware behavior that Defender + Safe Browsing hard-block ("dangerous/
+; virus"). The Share-sheet MSIX now ships through the Microsoft Store, which signs
+; it with a trusted cert (no root-store tampering, no self-signed anything).
 [Tasks]
-Name: "sharesheet"; Description: "Add Share2Us to the Windows ""Share"" menu (Snip & Sketch, Photos, etc.) and trust the Share2.us publisher"; Components: gui
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Components: gui; Flags: unchecked
 Name: "autoreceive"; Description: "Receive files sent to this device (start at login)"; Components: gui; Flags: unchecked
 
@@ -73,10 +78,6 @@ Name: "autoreceive"; Description: "Receive files sent to this device (start at l
 Source: "{#DistDir}\{#GuiExe}"; DestDir: "{app}"; Components: gui; Flags: ignoreversion
 ; skipifsourcedoesntexist: build the installer even if the CLI binary wasn't bundled.
 Source: "{#DistDir}\{#CliExe}"; DestDir: "{app}"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
-; Share-sheet task payload: the MSIX, the cert that signed it, and the trust+install helper.
-Source: "{#DistDir}\*.msix"; DestDir: "{app}"; Components: gui; Tasks: sharesheet; Flags: ignoreversion skipifsourcedoesntexist
-Source: "{#DistDir}\*.cer"; DestDir: "{app}"; Components: gui; Tasks: sharesheet; Flags: ignoreversion skipifsourcedoesntexist
-Source: "sharesheet.ps1"; DestDir: "{app}"; Components: gui; Tasks: sharesheet; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Share2Us"; Filename: "{app}\{#GuiExe}"; Components: gui
@@ -86,10 +87,6 @@ Name: "{userdesktop}\Share2Us"; Filename: "{app}\{#GuiExe}"; Components: gui; Ta
 [Run]
 ; Register the Explorer right-click integration for the current user.
 Filename: "{app}\{#GuiExe}"; Parameters: "--install-shell"; Components: gui; Flags: runhidden
-; Trust the bundled cert (LocalMachine) + install the MSIX (Windows Share sheet).
-; Runs in the installer's elevated context, so no nested self-elevation is needed.
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\sharesheet.ps1"""; \
-  StatusMsg: "Adding Share2Us to the Windows Share menu..."; Components: gui; Tasks: sharesheet; Flags: runhidden waituntilterminated
 ; Optionally start the background receiver at login.
 Filename: "{app}\{#GuiExe}"; Parameters: "--enable-autostart"; Components: gui; Tasks: autoreceive; Flags: runhidden
 ; Offer to launch the app at the end.
@@ -97,10 +94,6 @@ Filename: "{app}\{#GuiExe}"; Description: "Launch Share2Us"; Components: gui; Fl
 
 [UninstallRun]
 Filename: "{app}\{#GuiExe}"; Parameters: "--uninstall-shell"; Components: gui; Flags: runhidden; RunOnceId: "s2uUnregisterShell"
-; Best-effort removal of the Share-sheet MSIX package. No { } scriptblock here:
-; Inno parses braces as constants. Get-AppxPackage takes a wildcard name directly.
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-AppxPackage *Share2Us* | Remove-AppxPackage"""; \
-  Flags: runhidden; RunOnceId: "s2uRemoveMsix"
 
 [Registry]
 ; Append the install dir to the user PATH so `s2u` works from any terminal.

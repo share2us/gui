@@ -130,9 +130,12 @@ jobs:
         run: |
           # ONE self-signed cert signs the exe, the s2u CLI, the MSIX and (later)
           # Setup.exe. Its Subject MUST equal the MSIX manifest Publisher exactly
-          # (CN=Share2.us, O=Share2.us). The installer trusts this cert into the
-          # LocalMachine stores, so Windows then shows publisher "Share2.us"
-          # instead of "unknown". Basic Constraints (end-entity) keeps MSIX happy.
+          # (CN=Share2.us, O=Share2.us). NOTE: the installer no longer trusts this
+          # cert into LocalMachine\Root (that root-store write is a malware pattern
+          # Defender/Safe Browsing hard-block); the Store re-signs the MSIX with a
+          # trusted cert. The self-signed signature here just lets the in-app
+          # updater's VerifySignature confirm the Setup.exe came from Share2.us.
+          # Basic Constraints (end-entity) keeps MSIX happy.
           $cert = New-SelfSignedCertificate -Type CodeSigningCert `
             -Subject "CN=Share2.us, O=Share2.us" `
             -CertStoreLocation Cert:\CurrentUser\My `
@@ -164,8 +167,9 @@ jobs:
           & "$sdk\makeappx.exe" pack /d $stage /p $msix /o
           & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint /tr http://timestamp.digicert.com /td SHA256 $msix
 
-          # 3) Export the cert into dist\ so Inno bundles it (the .iss globs
-          #    dist\*.msix + dist\*.cer for the Share-sheet task).
+          # 3) Export the cert as a standalone asset (dev-only manual sideload of
+          #    the .msix into TrustedPeople). The installer no longer bundles or
+          #    trusts it.
           Export-Certificate -Cert $cert -FilePath dist\Share2Us-Cert.cer | Out-Null
           Get-ChildItem dist
       - name: Build installer (Inno Setup)
@@ -190,8 +194,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: pkg-installer
-          # Setup.exe bundles the MSIX + cert; the standalone .msix + .cer are also
-          # published for direct sideload / manual trust.
+          # Setup.exe = app + CLI only (no MSIX/cert bundled). The standalone
+          # .msix is published for Microsoft Store submission; the .cer is for
+          # dev-only manual sideload.
           path: installer/windows/Output/*
 
   # Publish whatever built (tolerant of a failed matrix leg).

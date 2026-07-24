@@ -13,32 +13,25 @@ the Photos app, Explorer, etc.
 ## Build (CI)
 
 The release workflow's **`installer`** job (windows-latest) builds it on every
-release, signed with the **same** self-signed cert as `Setup.exe` and the app
-(the cert Subject `CN=Share2.us, O=Share2.us` must equal the manifest
-`Publisher`): `wails build` → stage `share2us-gui.exe` + `Assets/` + a versioned
-manifest → `makeappx pack` → `signtool sign`. It publishes the standalone
-`Share2Us-<version>.msix` + `Share2Us-Cert.cer`, and **bundles both into
-`Setup.exe`**.
+release: `wails build` → stage `share2us-gui.exe` + `Assets/` + a versioned
+manifest → `makeappx pack`. It publishes the standalone `Share2Us-<version>.msix`
+as a release asset for **Microsoft Store submission** (the Store re-signs it with
+a trusted cert; its `Publisher` identity is assigned by Partner Center).
 
-## Install
+## Distribution — via the Microsoft Store (NOT the installer)
 
-Normally you don't sideload by hand — **`Setup.exe` does it for you.** With the
-"Add Share2Us to the Windows Share menu" task ticked (default), the admin
-installer trusts the bundled cert (LocalMachine `Root` + `TrustedPublisher` +
-`TrustedPeople`) and runs `Add-AppxPackage`, so the publisher shows as
-"Share2.us" and S2u appears in the Share sheet. See
-[`../windows/sharesheet.ps1`](../windows/sharesheet.ps1).
+The Share-sheet MSIX ships through the **Microsoft Store**. `Setup.exe` no longer
+installs it.
 
-To sideload the standalone `.msix` manually instead:
+Why the change: the installer used to sideload the MSIX by trusting a bundled
+**self-signed** cert into `LocalMachine\Root`. "An installer adds a root CA
+certificate" is a textbook malware behavior — Windows Defender and Google Safe
+Browsing hard-block it ("dangerous/virus"). The Store signs the package with a
+trusted cert, so there is no root-store tampering and no self-signed anything.
 
-```powershell
-# As admin: trust the publisher, then install the package.
-Import-Certificate -FilePath .\Share2Us-Cert.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
-Add-AppxPackage .\Share2Us-<version>.msix
-```
-
-After install, S2u appears in the Share sheet. (A real CA / Microsoft Store
-signature removes the manual cert-trust step.)
+For local dev sideloading you can still trust the standalone `.msix`'s cert into
+`TrustedPeople` (never `Root`) and `Add-AppxPackage` it, but that is a dev-only
+path — end users get it from the Store.
 
 ## ⚠️ Remaining work — the share-target file hand-off (needs Windows)
 
