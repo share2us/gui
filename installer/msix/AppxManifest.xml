@@ -22,17 +22,19 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap rescap">
 
-  <!-- Placeholder identity for local dev builds; overwritten with the Store-
-       assigned identity for submission (see the file header). -->
+  <!-- Identity assigned by Partner Center (reserved product "Share2Us",
+       Store ID 9NFR4MMM7RJ8). Must match exactly or Store ingestion rejects the
+       package. The Store re-signs with its trusted cert, so this MSIX is uploaded
+       UNSIGNED (do not signtool-sign it with the self-signed installer cert). -->
   <Identity
-    Name="Share2.us.Share2Us"
-    Publisher="CN=Share2.us, O=Share2.us"
+    Name="Share2Us.Share2us"
+    Publisher="CN=8F6CFF38-67FC-45C0-9A09-AF6CCD6B9EC9"
     Version="1.0.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
     <DisplayName>Share2Us</DisplayName>
-    <PublisherDisplayName>Share2.us</PublisherDisplayName>
+    <PublisherDisplayName>Share2Us</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 

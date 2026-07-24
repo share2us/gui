@@ -29,9 +29,11 @@ certificate" is a textbook malware behavior — Windows Defender and Google Safe
 Browsing hard-block it ("dangerous/virus"). The Store signs the package with a
 trusted cert, so there is no root-store tampering and no self-signed anything.
 
-For local dev sideloading you can still trust the standalone `.msix`'s cert into
-`TrustedPeople` (never `Root`) and `Add-AppxPackage` it, but that is a dev-only
-path — end users get it from the Store.
+The published `.msix` is **unsigned** (the Store signs it on ingestion), so it
+can't be sideloaded as-is. For local dev testing, re-sign your own copy with a
+self-signed cert whose Subject equals the manifest `Publisher`, trust that cert
+into `TrustedPeople` (never `Root`), then `Add-AppxPackage`. End users get it from
+the Store.
 
 ## ⚠️ Remaining work — the share-target file hand-off (needs Windows)
 

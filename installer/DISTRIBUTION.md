@@ -54,12 +54,21 @@ self-signed anything and Store apps are never Safe-Browsing/SmartScreen-flagged.
    **Package/Identity Name**, **Publisher** (`CN=...`), and **Publisher display
    name**.
 
-**Then (I can do):**
-5. Plug those three values into `installer/msix/AppxManifest.xml` `<Identity>` +
-   `<PublisherDisplayName>` (placeholders are flagged in the file).
-6. Wire a CI step (or a local `makeappx` build) that produces the Store-ready
-   `.msixupload`, and submit via Partner Center (manual first time; the Store
-   Submission API can automate later).
+**Done:** account created + app reserved (**Store ID `9NFR4MMM7RJ8`**,
+https://apps.microsoft.com/detail/9NFR4MMM7RJ8). Identity wired into
+`installer/msix/AppxManifest.xml` (`Name=Share2Us.Share2us`,
+`Publisher=CN=8F6CFF38-67FC-45C0-9A09-AF6CCD6B9EC9`). The release workflow now
+builds an **unsigned** `Share2Us-<ver>.msix` (the Store re-signs it) and publishes
+it as a release asset. Identity values live in
+`credentials/microsoft_store.conf` (git-ignored).
+
+**Remaining (owner, first submission is manual in Partner Center):**
+- Download `Share2Us-<latest>.msix` from the newest GitHub release.
+- Partner Center → the reserved product → **Packages** → upload the `.msix`.
+- Fill the listing (description, screenshots, category), **age rating**
+  (IARC questionnaire), privacy policy URL, and the **runFullTrust
+  justification** ("Desktop application packaged as MSIX").
+- Submit for certification. (The Store Submission API can automate later.)
 
 **Still pending regardless (needs Windows):** the Share Target *file hand-off*
 (receiving the shared file when the user picks S2u) — see

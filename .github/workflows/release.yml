@@ -125,17 +125,15 @@ jobs:
             echo "CLI release unavailable; installer will ship GUI-only"
           fi
           ls -la dist
-      - name: Sign binaries + build & sign MSIX (one self-signed cert)
+      - name: Sign binaries + build MSIX (Store-ready, unsigned)
         shell: pwsh
         run: |
-          # ONE self-signed cert signs the exe, the s2u CLI, the MSIX and (later)
-          # Setup.exe. Its Subject MUST equal the MSIX manifest Publisher exactly
-          # (CN=Share2.us, O=Share2.us). NOTE: the installer no longer trusts this
-          # cert into LocalMachine\Root (that root-store write is a malware pattern
-          # Defender/Safe Browsing hard-block); the Store re-signs the MSIX with a
-          # trusted cert. The self-signed signature here just lets the in-app
-          # updater's VerifySignature confirm the Setup.exe came from Share2.us.
-          # Basic Constraints (end-entity) keeps MSIX happy.
+          # A self-signed cert signs the exe, the s2u CLI and (later) Setup.exe so
+          # they carry a Share2.us signature. It does NOT sign the MSIX: the MSIX
+          # Publisher is now the Partner Center identity (CN=<GUID>), which the
+          # self-signed cert can't match, and the Microsoft Store re-signs the MSIX
+          # with its own trusted cert on ingestion. So the MSIX is published
+          # UNSIGNED for Store upload.
           $cert = New-SelfSignedCertificate -Type CodeSigningCert `
             -Subject "CN=Share2.us, O=Share2.us" `
             -CertStoreLocation Cert:\CurrentUser\My `
@@ -155,22 +153,18 @@ jobs:
             }
           }
 
-          # 2) Build the MSIX from the (already-built) app + assets.
+          # 2) Build the MSIX (unsigned) from the (already-built) app + assets.
           $stage = "msix-stage"
           New-Item -ItemType Directory -Force -Path "$stage\Assets" | Out-Null
           Copy-Item build\bin\share2us-gui.exe $stage\
           Copy-Item installer\msix\Assets\* $stage\Assets\
-          # MSIX Version must be 4-part numeric; use the CI run number.
+          # MSIX Version must be 4-part numeric with the 4th (revision) = 0 for the
+          # Store; use the CI run number for the build part.
           $ver = "1.0.${{ github.run_number }}.0"
           (Get-Content installer\msix\AppxManifest.xml) -replace 'Version="1.0.0.0"', "Version=`"$ver`"" | Set-Content "$stage\AppxManifest.xml"
           $msix = "dist\Share2Us-${{ needs.version.outputs.v }}.msix"
           & "$sdk\makeappx.exe" pack /d $stage /p $msix /o
-          & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint /tr http://timestamp.digicert.com /td SHA256 $msix
-
-          # 3) Export the cert as a standalone asset (dev-only manual sideload of
-          #    the .msix into TrustedPeople). The installer no longer bundles or
-          #    trusts it.
-          Export-Certificate -Cert $cert -FilePath dist\Share2Us-Cert.cer | Out-Null
+          # NOTE: no signtool on the MSIX (Store signs it; Publisher = CN=<GUID>).
           Get-ChildItem dist
       - name: Build installer (Inno Setup)
         shell: pwsh
@@ -186,17 +180,15 @@ jobs:
           Get-ChildItem installer\windows\Output\*.exe | ForEach-Object {
             & $env:SIGNTOOL sign /sha1 $env:SIGN_THUMB /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
           }
-          # Stage the standalone MSIX + cert next to Setup.exe so the artifact is a
-          # single flat folder (one common root -> upload/download stays flat, and
-          # the publish glob only ever sees files, never subdirectories).
+          # Stage the standalone (unsigned) MSIX next to Setup.exe so the artifact
+          # is a single flat folder (one common root -> upload/download stays flat,
+          # and the publish glob only ever sees files, never subdirectories).
           Copy-Item dist\*.msix installer\windows\Output\
-          Copy-Item dist\Share2Us-Cert.cer installer\windows\Output\
       - uses: actions/upload-artifact@v7
         with:
           name: pkg-installer
-          # Setup.exe = app + CLI only (no MSIX/cert bundled). The standalone
-          # .msix is published for Microsoft Store submission; the .cer is for
-          # dev-only manual sideload.
+          # Setup.exe = app + CLI only. The standalone unsigned .msix is published
+          # for Microsoft Store submission (the Store re-signs it).
           path: installer/windows/Output/*
 
   # Publish whatever built (tolerant of a failed matrix leg).
