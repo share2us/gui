@@ -39,6 +39,7 @@ type DownloadResult = { name: string; fingerprint: string; from: string; trusted
 interface AppBackend {
   Status(): Promise<Status>;
   PendingPaths(): Promise<string[]>;
+  PickFiles(): Promise<string[]>;
   Share(req: ShareRequest): Promise<ShareOutcome[]>;
   BeginLogin(): Promise<LoginInfo>;
   CompleteLogin(): Promise<Status>;
@@ -223,7 +224,7 @@ function nearbyRow(p: LanPeer): string {
 }
 
 function liveRow(bc: BroadcastState): string {
-  const now = bc.downloading.length, done = bc.completed.length;
+  const now = (bc.downloading || []).length, done = (bc.completed || []).length;
   return `<div class="item" id="live-row">
     <div class="ico out">📡</div>
     <div class="line"><b>Broadcasting</b> ${escapeHtml(bc.name)} <span class="meta">· ${now} now · ${done} done</span> <span class="tag live">live</span></div>
@@ -324,7 +325,11 @@ function bcMode(m: string, label: string, sub: string): string {
 function renderBroadcast(): void {
   const bc = state.bc;
   if (!bc) { state.view = 'home'; return render(); }
-  const sent = bc.completed.reduce((n, c) => n + c.total, 0) + bc.downloading.reduce((n, c) => n + c.sent, 0);
+  // Guard: a just-started broadcast has no connections yet, and Go marshals a nil
+  // slice as null — so these can be undefined.
+  const downloading = bc.downloading || [];
+  const completed = bc.completed || [];
+  const sent = completed.reduce((n, c) => n + c.total, 0) + downloading.reduce((n, c) => n + c.sent, 0);
   root.innerHTML = `<div class="modal">
     <header class="modal-head">
       <div class="brand"><button class="btn-mini" id="bc-back">←</button> Broadcast</div>
@@ -332,10 +337,10 @@ function renderBroadcast(): void {
     </header>
     <div class="modal-body" style="padding:14px 18px 24px">
       <div class="item" style="margin-bottom:6px"><div class="ico out">📡</div><div class="line"><b>${escapeHtml(bc.name)}</b> <span class="meta">· ${fmtBytes(bc.size)} · ${escapeHtml(accessLabel(bc.access))}</span></div></div>
-      <div class="stat-strip" style="margin:0 0 16px 38px"><b>${bc.downloading.length}</b>&nbsp;downloading · <b>${bc.completed.length}</b>&nbsp;done · <b>${fmtBytes(sent)}</b>&nbsp;sent</div>
-      ${bc.downloading.length ? `<div class="grp-label">Downloading now · <span class="n">${bc.downloading.length}</span></div>${bc.downloading.map(connRow).join('')}` : ''}
-      ${bc.completed.length ? `<div class="grp-label" style="margin-top:18px">Downloaded · <span class="n">${bc.completed.length}</span></div>${bc.completed.map(doneRow).join('')}` : ''}
-      ${!bc.downloading.length && !bc.completed.length ? `<div class="empty">Waiting for someone to download… share the file's presence — they'll see it when they scan.</div>` : ''}
+      <div class="stat-strip" style="margin:0 0 16px 38px"><b>${downloading.length}</b>&nbsp;downloading · <b>${completed.length}</b>&nbsp;done · <b>${fmtBytes(sent)}</b>&nbsp;sent</div>
+      ${downloading.length ? `<div class="grp-label">Downloading now · <span class="n">${downloading.length}</span></div>${downloading.map(connRow).join('')}` : ''}
+      ${completed.length ? `<div class="grp-label" style="margin-top:18px">Downloaded · <span class="n">${completed.length}</span></div>${completed.map(doneRow).join('')}` : ''}
+      ${!downloading.length && !completed.length ? `<div class="empty">Waiting for someone to download… they'll see it when they scan nearby.</div>` : ''}
     </div>
   </div>`;
   wire();
@@ -399,9 +404,9 @@ function loginProgress(): string {
 }
 function filesBlock(): string {
   if (!state.paths.length) {
-    return `<div class="canvas" id="canvas"><div class="canvas-ico">⬍</div><div class="canvas-title">Drop a file here, or paste with Ctrl+V</div><div class="canvas-sub">Screenshots, images and text work too.</div>${clipChip()}</div>`;
+    return `<div class="canvas" id="canvas"><div class="canvas-ico">⬍</div><div class="canvas-title">Choose files, drop them here, or paste with Ctrl+V</div><div class="canvas-sub">Screenshots, images and text work too.</div><button class="btn-choose" id="pick-files">Choose files</button>${clipChip()}</div>`;
   }
-  return `<div class="files">${state.paths.map((p, i) => `<div class="file-chip" title="${escapeHtml(p)}">${escapeHtml(basename(p))}<button class="chip-x" data-i="${i}" title="Remove">×</button></div>`).join('')}<span class="files-add">＋ paste / drop</span></div>`;
+  return `<div class="files">${state.paths.map((p, i) => `<div class="file-chip" title="${escapeHtml(p)}">${escapeHtml(basename(p))}<button class="chip-x" data-i="${i}" title="Remove">×</button></div>`).join('')}<button class="files-add" id="pick-files">＋ Add files</button></div>`;
 }
 function clipChip(): string {
   const c = state.clip;
@@ -573,6 +578,8 @@ function wire() {
   root.querySelector('#logout-btn')?.addEventListener('click', logout);
   root.querySelector('#apply-update')?.addEventListener('click', applyUpdate);
   root.querySelector('#open-share')?.addEventListener('click', () => { state.view = 'share'; render(); });
+  root.querySelector('#pick-files')?.addEventListener('click', (e) => { e.stopPropagation(); pickFiles(); });
+  root.querySelector('#canvas')?.addEventListener('click', pickFiles);
   root.querySelector('#share-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
   root.querySelector('#nearby-find')?.addEventListener('click', () => findNearby());
   root.querySelector('#clip-add')?.addEventListener('click', addClipboard);
@@ -672,10 +679,30 @@ async function manualUpdateCheck(e: Event) {
 
 // ---- Events + input --------------------------------------------------------
 
+async function pickFiles() {
+  try {
+    const paths = await backend().PickFiles();
+    if (paths && paths.length) { addPaths(paths); state.view = 'share'; render(); }
+  } catch (e) { toast(String(e)); }
+}
+
 let listenersReady = false;
 function setupListeners() {
   if (listenersReady) return; listenersReady = true;
   document.addEventListener('paste', onPaste);
+  // Stop the WebView from navigating to (opening) a file dropped outside a Wails
+  // drop target — that's what made drops "open like a web browser" and left the
+  // app unreachable. Real file paths still arrive via 'files-dropped' below.
+  ['dragenter', 'dragover', 'drop'].forEach((ev) =>
+    window.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); }, false));
+  // Escape closes an open overlay, or backs a modal out to Home.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (state.shareResult) { state.shareResult = null; render(); return; }
+    if (state.dl) { state.dl = null; render(); return; }
+    if (state.requests.length) { respondRequest(false); return; }
+    if (state.view !== 'home') { state.view = 'home'; render(); }
+  });
   const rt = (window as any).runtime;
   rt?.EventsOn?.('files-dropped', (paths: string[]) => { addPaths(paths || []); state.view = 'share'; render(); });
   rt?.EventsOn?.('lan-request', (r: any) => {

@@ -242,6 +242,19 @@ func (a *App) SetShellIntegration(on bool) error {
 // PendingPaths returns the paths Explorer passed to the Share verb.
 func (a *App) PendingPaths() []string { return a.pending }
 
+// PickFiles opens the native file picker and returns the selected paths (empty if
+// the user cancels). Backs the "Choose files" button so sharing works without
+// drag-and-drop.
+func (a *App) PickFiles() ([]string, error) {
+	paths, err := wailsRuntime.OpenMultipleFilesDialog(a.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "Choose files to share",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
 // ListDevices returns the account's own devices for the "send to device" picker.
 func (a *App) ListDevices() ([]core.Device, error) {
 	c, err := a.clientOrErr()
@@ -683,7 +696,16 @@ func (a *App) BroadcastStats() BroadcastState { return a.broadcastState() }
 func (a *App) broadcastState() BroadcastState {
 	a.bcMu.Lock()
 	defer a.bcMu.Unlock()
-	st := BroadcastState{Active: a.broadcaster != nil, Name: a.bcName, Size: a.bcSize, Access: a.bcAccess}
+	// Non-nil slices so they marshal as [] not null (the frontend calls .reduce/
+	// .map on them the moment a broadcast starts, before any connection exists).
+	st := BroadcastState{
+		Active:      a.broadcaster != nil,
+		Name:        a.bcName,
+		Size:        a.bcSize,
+		Access:      a.bcAccess,
+		Downloading: []lan.BcConn{},
+		Completed:   []lan.BcConn{},
+	}
 	for _, c := range a.bcActive {
 		st.Downloading = append(st.Downloading, c)
 	}
