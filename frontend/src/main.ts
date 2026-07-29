@@ -51,6 +51,7 @@ interface AppBackend {
   AddClipboard(kind: string): Promise<string>;
   CheckUpdate(): Promise<UpdateInfo>;
   ApplyUpdate(): Promise<void>;
+  IsStoreManaged(): Promise<boolean>;
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
   LanBrowse(): Promise<LanPeer[]>;
   SetDiscoverable(on: boolean): Promise<void>;
@@ -86,6 +87,8 @@ const state = {
   clip: null as ClipSuggestion | null,
   theme: 'dark' as 'dark' | 'light',
   update: null as UpdateInfo | null,
+  storeManaged: false as boolean, // Microsoft Store build/install -> updater hidden
+
   scanInterval: 60 as number,
   // share modal
   dest: 'nearby' as Dest,
@@ -119,6 +122,7 @@ async function boot() {
     state.status = status;
     state.paths = paths || [];
     state.scanInterval = await backend().GetScanInterval().catch(() => 60);
+    state.storeManaged = await backend().IsStoreManaged().catch(() => false);
     state.bc = await backend().BroadcastStats().catch(() => null);
     if (state.bc && !state.bc.active) state.bc = null;
     // Opened via the Share verb with files -> jump straight to the Share modal.
@@ -127,7 +131,7 @@ async function boot() {
     setupListeners();
     refreshActivity();
     loadTrusted();
-    checkForUpdate();
+    if (!state.storeManaged) checkForUpdate();
     checkClipboard();
     findNearby(); // populate nearby devices/broadcasts on open
     startScanTimer();
@@ -150,7 +154,7 @@ function header(): string {
     <div class="brand">${BRAND_SVG}<span>Share2Us</span></div>
     <div class="head-actions">
       <button class="icon-btn" id="theme-toggle" title="Toggle light/dark">${state.theme === 'dark' ? '☀' : '☾'}</button>
-      <button class="icon-btn" id="check-update" title="Check for updates">⟳</button>
+      ${state.storeManaged ? '' : `<button class="icon-btn" id="check-update" title="Check for updates">⟳</button>`}
       ${
         s.loggedIn
           ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span><button class="btn-hdr" id="logout-btn">Logout</button>`
@@ -385,6 +389,7 @@ function downloadOverlay(p: LanPeer & { trust?: boolean }): string {
 // ---- Shared bits -----------------------------------------------------------
 
 function updateBanner(): string {
+  if (state.storeManaged) return '';
   const u = state.update;
   if (!u?.available) return '';
   return `<div class="update-bar"><span>Update available — <strong>v${escapeHtml(u.latest)}</strong></span><button class="btn-mini" id="apply-update">Install</button></div>`;
@@ -561,7 +566,7 @@ function startScanTimer() {
   if (!sec || sec <= 0) return;
   scanTimer = window.setInterval(() => { if (state.view === 'home') findNearby(true); }, sec * 1000);
 }
-async function checkForUpdate() { try { const info = await backend().CheckUpdate(); if (info?.available) { state.update = info; render(); } } catch { /* */ } }
+async function checkForUpdate() { if (state.storeManaged) return; try { const info = await backend().CheckUpdate(); if (info?.available) { state.update = info; render(); } } catch { /* */ } }
 async function checkClipboard() {
   try { const c = await backend().ClipboardSuggestion(); state.clip = c && c.kind !== 'none' ? c : null; render(); } catch { /* */ }
 }

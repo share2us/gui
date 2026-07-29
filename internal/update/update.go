@@ -1,6 +1,12 @@
+//go:build !store
+
 // Package update checks GitHub Releases for a newer Share2Us build. Versions are
 // UTC-timestamp strings (main.buildVersion), so "newer" is a plain string compare
 // of the release tag against the running build.
+//
+// This file (and the network/installer machinery) is compiled out of the Store
+// build (`-tags store`), which ships update_store.go instead — the Microsoft
+// Store distributes and updates the MSIX itself (Store policy 10.2.5).
 package update
 
 import (
@@ -15,16 +21,6 @@ import (
 )
 
 const defaultReleasesURL = "https://api.github.com/repos/share2us/gui/releases/latest"
-
-// Info is the result of an update check.
-type Info struct {
-	Available bool   `json:"available"`
-	Current   string `json:"current"`
-	Latest    string `json:"latest"`
-	AssetURL  string `json:"assetUrl"`  // installer/archive for this OS ("" if none)
-	AssetName string `json:"assetName"` // its filename
-	Page      string `json:"page"`      // release page (fallback)
-}
 
 type ghAsset struct {
 	Name string `json:"name"`

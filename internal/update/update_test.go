@@ -1,3 +1,5 @@
+//go:build !store
+
 package update
 
 import "testing"

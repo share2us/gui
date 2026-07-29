@@ -70,6 +70,24 @@ it as a release asset. Identity values live in
   justification** ("Desktop application packaged as MSIX").
 - Submit for certification. (The Store Submission API can automate later.)
 
+**Store policy 10.2.5 (no self-update) — resolved.** The first submission was
+rejected because the app self-updates outside the Store (the in-app updater polls
+GitHub Releases and runs `Setup.exe`). Fix = the MSIX now ships an updater-free
+binary, two ways (belt-and-suspenders):
+- **Build tag (`-tags store`, belt):** `release.yml` builds a second Windows
+  binary with `-tags store` and packs *that* into the MSIX. The `store` build
+  compiles out the whole updater — `internal/update/update.go` (GitHub polling)
+  is `//go:build !store` and replaced by `update_store.go`; the installer-launch
+  and signature-verify paths are compiled out too. Verified: the store binary
+  contains neither the GitHub releases URL nor the `Share2Us-Setup-` asset name.
+  The direct-download `Setup.exe` still uses the normal binary and self-updates.
+- **Runtime detection (suspenders):** `update.IsStoreManaged()` also returns true
+  when the process has MSIX package identity (`GetCurrentPackageFullName`), so any
+  packaged copy disables the updater and hides its UI even if it were the normal
+  build. `CheckUpdate`/`ApplyUpdate` no-op and the ⟳ button + update banner are
+  hidden when store-managed.
+No in-app purchases, so the "in-app products" half of 10.2.5 is N/A.
+
 **Still pending regardless (needs Windows):** the Share Target *file hand-off*
 (receiving the shared file when the user picks S2u) — see
 `installer/msix/README.md` and `internal/sharetarget/sharetarget_windows.go`. The

@@ -875,8 +875,20 @@ func (a *App) SetDeviceAccess(email, sessionID string, exposed bool) error {
 	return c.UnexposeDevice(a.ctx, email, sessionID)
 }
 
+// IsStoreManaged reports whether this copy is distributed via the Microsoft Store
+// (built with -tags store, or running as an MSIX package). The frontend uses it to
+// hide the update controls; when true the app never self-updates (Store policy
+// 10.2.5 — the Store owns updates).
+func (a *App) IsStoreManaged() bool {
+	return update.IsStoreManaged()
+}
+
 // CheckUpdate reports whether a newer Share2Us release is available for this OS.
+// Store-managed copies never self-update, so it always reports none available.
 func (a *App) CheckUpdate() update.Info {
+	if update.IsStoreManaged() {
+		return update.Info{Current: buildVersion}
+	}
 	info, err := update.Check(a.ctx, buildVersion)
 	if err != nil {
 		return update.Info{Current: buildVersion}
@@ -888,6 +900,9 @@ func (a *App) CheckUpdate() update.Info {
 // and quits so it can replace the running app; elsewhere it opens the release page
 // (self-replacing a running GUI is unreliable cross-platform).
 func (a *App) ApplyUpdate() error {
+	if update.IsStoreManaged() {
+		return nil // the Microsoft Store applies updates; never self-update
+	}
 	info, err := update.Check(a.ctx, buildVersion)
 	if err != nil {
 		return err

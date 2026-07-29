@@ -115,16 +115,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$(go env GOPATH)/bin/wails" build -platform windows/amd64 -s -skipbindings \
+          wails="$(go env GOPATH)/bin/wails"
+          # 1) Normal build -> the direct-download binary for Setup.exe. Keeps the
+          #    in-app updater (self-updates from GitHub Releases).
+          "$wails" build -platform windows/amd64 -s -skipbindings \
             -ldflags "-X main.buildVersion=${{ needs.version.outputs.v }}"
           mkdir -p dist
           cp build/bin/share2us-gui.exe dist/
+          # 2) Store build (-tags store) -> the binary that goes INTO the MSIX. The
+          #    updater is compiled out (Store policy 10.2.5: the Store owns updates).
+          #    Stash it before the normal exe location is reused.
+          "$wails" build -platform windows/amd64 -s -skipbindings -tags store \
+            -ldflags "-X main.buildVersion=${{ needs.version.outputs.v }}"
+          mkdir -p store-bin
+          cp build/bin/share2us-gui.exe store-bin/share2us-gui.exe
           if curl -fsSL -o cli.zip https://github.com/share2us/cli/releases/latest/download/share2us_windows_amd64.zip; then
             unzip -o cli.zip -d dist && mv -f dist/share2us.exe dist/s2u.exe
           else
             echo "CLI release unavailable; installer will ship GUI-only"
           fi
-          ls -la dist
+          ls -la dist store-bin
       - name: Sign binaries + build MSIX (Store-ready, unsigned)
         shell: pwsh
         run: |
@@ -156,7 +166,9 @@ jobs:
           # 2) Build the MSIX (unsigned) from the (already-built) app + assets.
           $stage = "msix-stage"
           New-Item -ItemType Directory -Force -Path "$stage\Assets" | Out-Null
-          Copy-Item build\bin\share2us-gui.exe $stage\
+          # Use the STORE-tagged binary (updater compiled out), not the direct-
+          # download build, so the packaged app never self-updates (policy 10.2.5).
+          Copy-Item store-bin\share2us-gui.exe $stage\
           Copy-Item installer\msix\Assets\* $stage\Assets\
           # MSIX Version must be 4-part numeric with the 4th (revision) = 0 for the
           # Store; use the CI run number for the build part.
