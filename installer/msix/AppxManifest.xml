@@ -74,6 +74,16 @@
   </Applications>
 
   <Capabilities>
+    <!-- Network access. Even a full-trust package needs these declared so Windows
+         creates the firewall rules for the package identity; without them a
+         packaged build can reach the internet but its INBOUND LAN listener + mDNS
+         multicast are blocked, making local-network sharing/broadcasting unusable
+         (MS Store 10.1.2.10). privateNetworkClientServer is the key one — it allows
+         inbound + outbound on Home/Work (private) networks, which LAN discovery and
+         accepting incoming transfers require. -->
+    <Capability Name="internetClient" />
+    <Capability Name="internetClientServer" />
+    <Capability Name="privateNetworkClientServer" />
     <rescap:Capability Name="runFullTrust" />
   </Capabilities>
 </Package>

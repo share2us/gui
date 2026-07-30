@@ -88,6 +88,25 @@ binary, two ways (belt-and-suspenders):
   hidden when store-managed.
 No in-app purchases, so the "in-app products" half of 10.2.5 is N/A.
 
+**Store policy 10.1.2.10 (functionality) — LAN sharing/broadcasting "unusable".**
+The Store test found local-network sharing/broadcasting non-functional in the MSIX
+on two real Windows machines (with internet). Root cause: the manifest declared
+only `runFullTrust` and NO network capabilities. Even a full-trust package needs
+network capabilities declared so Windows creates firewall rules for the package
+identity — otherwise the package can reach the internet but its INBOUND LAN
+listener + mDNS multicast are blocked, so peers can't discover or connect to it.
+Fix (`installer/msix/AppxManifest.xml`): added `internetClient`,
+`internetClientServer`, and — the key one — `privateNetworkClientServer` (inbound +
+outbound on Home/Work networks, which LAN discovery and accepting incoming
+transfers require). These are standard (non-restricted) capabilities, so no extra
+Store justification is needed beyond runFullTrust.
+Secondary risk to watch (not changed here — it reverses the F3 security decision):
+`internal/lan/lan.go` binds the listener to a single LAN IP detected via
+`net.Dial("udp","8.8.8.8:80")`; on a host whose default internet route is a VPN /
+virtual adapter that IP is wrong and LAN is unreachable. If the capability fix does
+not fully resolve it on a VPN-connected machine, consider binding all interfaces
+(0.0.0.0) or choosing the private-LAN interface explicitly.
+
 **Still pending regardless (needs Windows):** the Share Target *file hand-off*
 (receiving the shared file when the user picks S2u) — see
 `installer/msix/README.md` and `internal/sharetarget/sharetarget_windows.go`. The
