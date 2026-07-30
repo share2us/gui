@@ -339,10 +339,16 @@ func Download(ctx context.Context, addr, fingerprint, name string, size int64, d
 	return Result{Name: res.Name, Path: res.Path, Bytes: res.Bytes, From: firstNonEmpty(res.PeerIP, "a nearby device")}, fp, nil
 }
 
-// PrimaryIP returns this host's primary outbound LAN/overlay IP (the address a
-// peer on the same network can reach), or 127.0.0.1 if it can't be determined.
-// It opens no connection — the UDP "dial" just selects the outbound interface.
+// PrimaryIP returns the address a peer on the same network can reach — the IP
+// embedded in the pairing code/QR the receiver shows. It prefers a real private
+// LAN interface over the internet-routing interface, because on a host whose
+// default route is a VPN/Tailscale the 8.8.8.8 trick returns the overlay IP, and a
+// sender handed that code connects to an address it can't reach. Falls back to the
+// routing IP, then loopback.
 func PrimaryIP() string {
+	if ip := bestLocalIPv4(); ip != "" {
+		return ip
+	}
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
 		return "127.0.0.1"
@@ -352,4 +358,57 @@ func PrimaryIP() string {
 		return a.IP.String()
 	}
 	return "127.0.0.1"
+}
+
+// bestLocalIPv4 enumerates the host's interfaces and returns the most
+// LAN-reachable IPv4: a private RFC1918 address (the real LAN) beats a
+// CGNAT/Tailscale 100.64/10 overlay, which beats any other routable address; an
+// APIPA 169.254 link-local is last. Returns "" if no usable IPv4 exists. Mirrors
+// the receiver-side lanshare.bestAddr choice so both ends agree on the LAN IP.
+func bestLocalIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	best, bestScore := "", -1
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, aerr := ifc.Addrs()
+		if aerr != nil {
+			continue
+		}
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			v4 := ip.To4()
+			if v4 == nil {
+				continue
+			}
+			s := localIPv4Score(v4)
+			if s > bestScore {
+				best, bestScore = v4.String(), s
+			}
+		}
+	}
+	return best
+}
+
+func localIPv4Score(v4 net.IP) int {
+	switch {
+	case v4[0] == 169 && v4[1] == 254: // APIPA link-local — usually unreachable
+		return 0
+	case v4[0] == 100 && v4[1]&0xC0 == 0x40: // 100.64/10 CGNAT (Tailscale overlay)
+		return 2
+	case v4.IsPrivate(): // 10/8, 172.16/12, 192.168/16 — a real LAN
+		return 3
+	default: // other routable
+		return 1
+	}
 }
