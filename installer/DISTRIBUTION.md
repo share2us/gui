@@ -100,12 +100,15 @@ Fix (`installer/msix/AppxManifest.xml`): added `internetClient`,
 outbound on Home/Work networks, which LAN discovery and accepting incoming
 transfers require). These are standard (non-restricted) capabilities, so no extra
 Store justification is needed beyond runFullTrust.
-Secondary risk to watch (not changed here — it reverses the F3 security decision):
-`internal/lan/lan.go` binds the listener to a single LAN IP detected via
-`net.Dial("udp","8.8.8.8:80")`; on a host whose default internet route is a VPN /
-virtual adapter that IP is wrong and LAN is unreachable. If the capability fix does
-not fully resolve it on a VPN-connected machine, consider binding all interfaces
-(0.0.0.0) or choosing the private-LAN interface explicitly.
+Belt-and-suspenders (also applied): `internal/lan/lan.go` used to bind the listener
+to a single LAN IP detected via `net.Dial("udp","8.8.8.8:80")` — on a host whose
+default internet route is a VPN/virtual adapter that IP is wrong and the LAN is
+unreachable. Now binds all interfaces (`Bind: ""`) for both the receiver and the
+broadcaster; mDNS already publishes every interface address (grandcat/zeroconf with
+ifaces=nil), so the listener is reachable on whichever IP a peer resolves. This
+reverses the earlier "limit exposure" (Y-SEC F3) bind choice — acceptable because
+the trust/PAKE/approval model, not the bind address, is the real access control,
+and the Store requires the feature to actually work.
 
 **Still pending regardless (needs Windows):** the Share Target *file hand-off*
 (receiving the shared file when the user picks S2u) — see

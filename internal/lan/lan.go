@@ -194,7 +194,12 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 		var adv io.Closer
 		_, err := lanshare.Receive(ctx, lanshare.ReceiveOptions{
 			DestDir:    destDir,
-			Bind:       ip,   // bind the LAN/overlay IP, not 0.0.0.0 (limit exposure)
+			// Bind all interfaces. A single detected IP (via the 8.8.8.8 route
+			// trick) is wrong behind a VPN/virtual default route, leaving the LAN
+			// unreachable. mDNS publishes every interface address, so binding all
+			// keeps the listener reachable on whichever one a peer resolves. The
+			// trust/PAKE/approval model — not the bind address — is the guard.
+			Bind:       "",
 			NoPassword: true, // open listener, but every transfer is user-approved
 			Loop:       true,
 			OnListen: func(info lanshare.ListenInfo) {
@@ -276,7 +281,6 @@ func StartBroadcast(parent context.Context, path, access string, approve func(Re
 	name := filepath.Base(path)
 	size := info.Size()
 	ctx, cancel := context.WithCancel(parent)
-	ip := PrimaryIP()
 	id, _ := lanid.Identity()
 	host, _ := os.Hostname()
 	if host == "" {
@@ -285,7 +289,7 @@ func StartBroadcast(parent context.Context, path, access string, approve func(Re
 	go func() {
 		var adv io.Closer
 		berr := lanshare.Broadcast(ctx, lanshare.BroadcastOptions{
-			Path: path, Name: name, Bind: ip, Access: access, Identity: id,
+			Path: path, Name: name, Bind: "", Access: access, Identity: id,
 			IsTrusted: func(fp string) bool { _, ok := lanid.Lookup(fp); return ok },
 			OnRequest: func(r lanshare.RequestInfo) bool {
 				fp := lanshare.IdentityFingerprint(r.SenderKey)
