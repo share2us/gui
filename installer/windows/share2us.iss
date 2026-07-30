@@ -85,6 +85,14 @@ Name: "{group}\Uninstall Share2Us"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\Share2Us"; Filename: "{app}\{#GuiExe}"; Components: gui; Tasks: desktopicon
 
 [Run]
+; Allow the app inbound on the local network so device discovery (mDNS multicast,
+; UDP 5353) and incoming transfers work. Without an explicit rule Windows Firewall
+; blocks inbound by default, and mDNS multicast RECEIVE often never triggers the
+; interactive "allow" prompt — so "nearby devices" stays empty. Program-scoped
+; (covers the ephemeral TCP transfer port + UDP mDNS), private+domain profiles
+; only (LAN sharing is for trusted networks; the app's own PAKE/approval gates
+; every transfer). The installer is elevated, so netsh can add it.
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Share2Us local sharing"" dir=in action=allow program=""{app}\{#GuiExe}"" enable=yes profile=private,domain"; Components: gui; Flags: runhidden; StatusMsg: "Allowing local-network sharing through Windows Firewall..."
 ; Register the Explorer right-click integration for the current user.
 Filename: "{app}\{#GuiExe}"; Parameters: "--install-shell"; Components: gui; Flags: runhidden
 ; Optionally start the background receiver at login.
@@ -93,6 +101,7 @@ Filename: "{app}\{#GuiExe}"; Parameters: "--enable-autostart"; Components: gui; 
 Filename: "{app}\{#GuiExe}"; Description: "Launch Share2Us"; Components: gui; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Share2Us local sharing"""; Flags: runhidden; RunOnceId: "s2uDelFwRule"
 Filename: "{app}\{#GuiExe}"; Parameters: "--uninstall-shell"; Components: gui; Flags: runhidden; RunOnceId: "s2uUnregisterShell"
 
 [Registry]

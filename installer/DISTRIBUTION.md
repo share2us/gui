@@ -100,6 +100,19 @@ Fix (`installer/msix/AppxManifest.xml`): added `internetClient`,
 outbound on Home/Work networks, which LAN discovery and accepting incoming
 transfers require). These are standard (non-restricted) capabilities, so no extra
 Store justification is needed beyond runFullTrust.
+**Direct .exe: mDNS discovery finds nothing — Windows Firewall.** Field test on two
+laptops (direct Setup.exe, same Private Wi-Fi) showed the "nearby devices" list
+never populating. Root cause: the Inno installer added NO firewall rule, so Windows
+Firewall blocks the app's inbound by default — and mDNS multicast RECEIVE (UDP 5353)
+usually never triggers the interactive "allow" prompt, so discovery silently gets
+nothing. Fix (`installer/windows/share2us.iss`): the (elevated) installer now adds a
+program-scoped inbound allow rule (`netsh advfirewall`, private+domain profiles) and
+removes it on uninstall. Covers both the ephemeral TCP transfer port and UDP mDNS.
+Note: only applies after reinstalling with the new Setup.exe; the portable .zip has
+no installer, so it still depends on the user allowing the firewall prompt. Also note
+"direct IP not working" in that test was the intended security guard (a bare address
+has no cert pin — the receiver's CODE carries the fingerprint; use that), not a bug.
+
 Belt-and-suspenders (also applied): `internal/lan/lan.go` used to bind the listener
 to a single LAN IP detected via `net.Dial("udp","8.8.8.8:80")` — on a host whose
 default internet route is a VPN/virtual adapter that IP is wrong and the LAN is
