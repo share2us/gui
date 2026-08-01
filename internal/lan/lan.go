@@ -16,7 +16,7 @@ import (
 
 	"github.com/share2us/cli-core/lanshare"
 	"github.com/share2us/gui/internal/core"
-	"github.com/share2us/gui/internal/lanid"
+	"github.com/share2us/cli-core/lanid"
 )
 
 // Listen is what a sender needs to reach this receiver, surfaced to the UI.

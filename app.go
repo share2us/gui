@@ -20,7 +20,7 @@ import (
 	"github.com/share2us/gui/internal/clip"
 	"github.com/share2us/gui/internal/core"
 	"github.com/share2us/gui/internal/lan"
-	"github.com/share2us/gui/internal/lanid"
+	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/shell"
 	"github.com/share2us/gui/internal/update"
