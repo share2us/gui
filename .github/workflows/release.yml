@@ -1,21 +1,27 @@
 name: release
 
-# On every push to main, build the GUI for each desktop platform with `wails
-# build` (embeds the app icon, Windows manifest, and publisher metadata), and
-# publish a GitHub Release with per-OS archives + a Windows installer.
+# Build the GUI for each desktop platform with `wails build` (embeds the app
+# icon, Windows manifest, and publisher metadata) and publish a GitHub Release
+# with per-OS archives + a Windows installer.
+#
+# DELIBERATE, NOT AUTOMATIC. This used to fire on every push to main, so merging
+# any change shipped a build to every installed GUI -- the in-app updater reads
+# /releases/latest. Cutting a release is now an explicit action.
+#
+#   channel=beta   -> pre-release, --latest=false. internal/update/update.go
+#                     asks GitHub for releases/latest, so a beta is invisible to
+#                     installed clients by construction. This is the staging
+#                     channel.
+#   channel=stable -> --latest. Users get it on their next update check.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - "frontend/**"
-      - "build/**"
-      - "wails.json"
-      - "installer/**"
-      - ".github/workflows/release.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "stable = released to all users; beta = pre-release, updater will not see it"
+        required: true
+        default: beta
+        type: choice
+        options: [beta, stable]
 
 permissions:
   contents: write
@@ -221,8 +227,35 @@ jobs:
           # Pass files only (never a directory) so nested artifact layouts can't
           # break the release upload.
           mapfile -t assets < <(find staging -type f | sort)
+          # Notes come from CHANGELOG.md's [Unreleased] section; a stable
+          # release FAILS when it is empty, so a build cannot reach users
+          # without saying what changed.
+          NOTES_FILE=notes.md
+          unreleased() { awk '/^## \[Unreleased\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md | sed '/<!--/,/-->/d'; }
+          if [ -f CHANGELOG.md ] && unreleased | grep -q '[^[:space:]]'; then
+            unreleased > "$NOTES_FILE"
+          else
+            if [ "${{ inputs.channel }}" = stable ]; then
+              echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
+              exit 1
+            fi
+            echo "Beta build from ${GITHUB_SHA}. Not served to stable users." > "$NOTES_FILE"
+          fi
+          {
+            echo ""
+            echo "Windows: the **Share2Us-Setup** installer, or \`irm https://raw.githubusercontent.com/share2us/gui/main/scripts/install.ps1 | iex\`"
+            echo "Linux: \`curl -fsSL https://raw.githubusercontent.com/share2us/gui/main/scripts/install.sh | sh\`"
+            echo "macOS: unzip the .app (unsigned — right-click → Open the first time)."
+          } >> "$NOTES_FILE"
+
+          if [ "${{ inputs.channel }}" = stable ]; then
+            LATEST_FLAGS="--latest"
+          else
+            LATEST_FLAGS="--prerelease --latest=false"
+          fi
+          # shellcheck disable=SC2086
           gh release create "v${VERSION}" "${assets[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "Share2Us GUI ${VERSION}" \
-            --notes "Automated build from ${GITHUB_SHA}. Windows: **Share2Us-Setup-${VERSION}.exe**, or \`irm https://raw.githubusercontent.com/share2us/gui/main/scripts/install.ps1 | iex\`. Linux: \`curl -fsSL https://raw.githubusercontent.com/share2us/gui/main/scripts/install.sh | sh\`. macOS: unzip the .app (unsigned — right-click → Open the first time)." \
-            --latest
+            --notes-file "$NOTES_FILE" \
+            $LATEST_FLAGS
