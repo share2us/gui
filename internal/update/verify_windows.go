@@ -13,15 +13,32 @@ import (
 // a GUI (-H windowsgui) process spawns a console app like powershell.exe.
 const createNoWindow = 0x08000000 // CREATE_NO_WINDOW
 
-// VerifySignature returns nil only when path carries a Valid Authenticode
-// signature whose signer subject names Share2.us. It is FAIL-CLOSED: any error,
-// a non-Valid status, or a different signer means "do not run this update".
+// VerifySignature returns nil when path carries an Authenticode signature whose
+// signer subject names Share2.us. It is FAIL-CLOSED on anything it can check:
+// no signature, an unreadable one, or a different signer means "do not run this".
 //
-// Get-AuthenticodeSignature validates against the machine trust store; the
-// Share2.us code-signing cert is trusted there after the first installer run
-// imports it, so a legitimately-signed update reads as Valid while a swapped or
-// unsigned binary does not. This is the gate that stops the auto-updater from
-// executing an attacker-supplied installer even if the download were tampered.
+// It deliberately does NOT require Status == Valid, and that is not a relaxation
+// of a working check — it is the removal of one that could never pass.
+//
+// The original version required Valid, on the assumption (still visible in an old
+// comment) that the installer imported the Share2.us code-signing cert into the
+// machine trust store on first run. That import was removed in c1f82ae because
+// adding a root CA is a textbook malware behaviour and Defender blocked the
+// installer for it. Nothing imports the cert now, so Status reads UnknownError.
+//
+// It could not be restored by re-adding the import either: the release workflow
+// calls New-SelfSignedCertificate on EVERY run, so each release is signed by a
+// different, unrelated keypair. There is no stable identity to trust, which is
+// also why SmartScreen reputation never accumulates (installer/DISTRIBUTION.md).
+//
+// Verified on Windows 10 Pro 2026-09-02: both the shipped Setup.exe and the
+// installed share2us-gui.exe report UnknownError, and zero Share2.us certs exist
+// in any trust store. Every update offered to a Windows user was therefore
+// refused at this gate.
+//
+// Integrity is now carried by VerifyChecksum against the release's published
+// .sha256. This function is left as a cheap "is it still signed by us" smoke
+// test. A real identity check needs a stable signing key held outside CI.
 func VerifySignature(path string) error {
 	script := "$ErrorActionPreference='Stop';" +
 		"$s=Get-AuthenticodeSignature -LiteralPath " + psQuote(path) + ";" +
@@ -41,8 +58,14 @@ func VerifySignature(path string) error {
 	if len(lines) > 1 {
 		subject = strings.TrimSpace(lines[1])
 	}
-	if status != "Valid" {
-		return errors.New("the update's code signature is not Valid (" + status + ")")
+	// NotSigned / HashMismatch mean the file is unsigned or altered: refuse.
+	// UnknownError is what a self-signed cert legitimately produces here, so it
+	// is accepted (see the doc comment) — the checksum is the real gate.
+	switch status {
+	case "NotSigned", "HashMismatch":
+		return errors.New("the update is not signed (" + status + ")")
+	case "":
+		return errors.New("could not read the update's code signature")
 	}
 	if !strings.Contains(strings.ToLower(subject), "share2.us") {
 		return errors.New("the update is not signed by Share2.us")

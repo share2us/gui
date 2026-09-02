@@ -915,10 +915,17 @@ func (a *App) ApplyUpdate() error {
 		if err != nil {
 			return err
 		}
-		// Never execute the downloaded installer unless it carries a Valid
-		// Authenticode signature from Share2.us (fail-closed). This is the last
-		// line of defence if the download were somehow tampered.
+		// Integrity gate. The checksum is the one that actually proves something
+		// here: the Authenticode signature is made with a per-run self-signed cert
+		// (see update.VerifySignature), so it can confirm the file is still signed
+		// by us but never that the signer is the same publisher as last release.
+		// Both are fail-closed; the download is discarded unless both pass.
+		if err := update.VerifyChecksum(a.ctx, &http.Client{Timeout: 30 * time.Second}, path, info.SHA256URL); err != nil {
+			_ = os.Remove(path)
+			return err
+		}
 		if err := update.VerifySignature(path); err != nil {
+			_ = os.Remove(path)
 			return err
 		}
 		// ShellExecute (not os/exec) so the installer's requireAdministrator

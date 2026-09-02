@@ -198,6 +198,16 @@ jobs:
           Get-ChildItem installer\windows\Output\*.exe | ForEach-Object {
             & $env:SIGNTOOL sign /sha1 $env:SIGN_THUMB /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
           }
+          # Publish a SHA-256 next to Setup.exe. The in-app updater downloads THIS
+          # asset, and until now it was the only published artifact with no hash,
+          # so the updater had nothing to verify against. Authenticode cannot serve
+          # that purpose here: the signing cert is generated fresh by
+          # New-SelfSignedCertificate on every run, so it chains to nothing and its
+          # thumbprint changes each release.
+          Get-ChildItem installer\windows\Output\*.exe | ForEach-Object {
+            (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower() |
+              Set-Content -Encoding ascii ($_.FullName + '.sha256')
+          }
           # Stage the standalone (unsigned) MSIX next to Setup.exe so the artifact
           # is a single flat folder (one common root -> upload/download stays flat,
           # and the publish glob only ever sees files, never subdirectories).

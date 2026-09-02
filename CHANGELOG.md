@@ -20,6 +20,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- The Windows in-app updater could never install an update. It required a
+  `Valid` Authenticode status, but the installer stopped importing the signing
+  certificate (removed because adding a root CA is what made Defender flag the
+  installer as malware), and the release workflow mints a new self-signed
+  certificate on every run — so the signature chains to nothing and always reads
+  `UnknownError`. Every update offered to a Windows user was refused at that
+  gate. Integrity is now verified against a SHA-256 published alongside the
+  installer, which the release did not previously include.
+
 ## Earlier
 
 Releases before this changelog existed. See the GitHub releases list for the
