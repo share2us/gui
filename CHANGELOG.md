@@ -8,9 +8,12 @@ build cannot reach users without saying what changed. On release, move the
 section under a new version heading. HTML comments do not count as content, so
 a section holding only a note still blocks a stable release.
 
-Changes already on `main` but never described in any release (the broadcast /
-home-feed redesign, transfer resume, and the LAN security pass) should be
-written up before the next stable goes out.
+`[Unreleased]` is genuinely empty right now, and that is correct: the last
+release (`v20260801223900`, 2026-08-01) already contains everything on `main`
+except the release-workflow change itself, which is not user-facing. The
+broadcast / home-feed redesign, transfer resume and the LAN security pass all
+shipped before that tag — they were released without written notes, which is the
+gap this file closes going forward, not a backlog of unreleased work.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are UTC build timestamps (`20260902114433`), not semver.
