@@ -604,21 +604,80 @@ func (a *App) promptApproval(r lan.Request, action string) bool {
 	return ok
 }
 
-// TrustDevice adds a device (by verified key fingerprint) to the trusted list
-// with a mode: "ask" (default; one-tap approval per transfer, no code) or
-// "auto" (its transfers are saved without asking). Revocable.
-func (a *App) TrustDevice(fingerprint, name, mode string) error {
-	return lanid.TrustWithMode(fingerprint, name, mode)
+// TrustChallengeInfo is what the UI needs to collect the second factor.
+type TrustChallengeInfo struct {
+	ChallengeID string `json:"challengeId"`
+	Factor      string `json:"factor"` // "email" | "totp"
+	SentTo      string `json:"sentTo"`
+	VerifyCode  string `json:"verifyCode"`
+	ExpiresIn   int    `json:"expiresIn"`
 }
 
-// SetTrustMode changes the mode of an already-trusted device ("ask" | "auto").
+// TrustDevice opens a trust challenge for a device (ADR-034). Nothing is trusted
+// until VerifyTrust succeeds with the code the server delivered (email, or the
+// user's authenticator once enrolled). Needs a signed-in interactive login;
+// personal API tokens are refused, so an agent holding one cannot trust.
+func (a *App) TrustDevice(fingerprint, name, mode string) (TrustChallengeInfo, error) {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return TrustChallengeInfo{}, errors.New("sign in to trust a device")
+	}
+	if c.IsAPIToken() {
+		return TrustChallengeInfo{}, errors.New("trusting a device needs an interactive login, not an API token")
+	}
+	ch, err := c.TrustOpen(a.ctx, fingerprint, name, mode)
+	if err != nil {
+		return TrustChallengeInfo{}, err
+	}
+	return TrustChallengeInfo{ChallengeID: ch.ChallengeID, Factor: ch.Factor, SentTo: ch.SentTo, VerifyCode: ch.VerifyCode, ExpiresIn: ch.ExpiresIn}, nil
+}
+
+// VerifyTrust submits the code for a challenge; on success the device is
+// trusted on the account and the signed list is cached. A wrong code returns
+// the server's message (the user may retry while attempts remain).
+func (a *App) VerifyTrust(challengeID, code string) error {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return errors.New("sign in to trust a device")
+	}
+	if err := c.TrustVerify(a.ctx, challengeID, code); err != nil {
+		var apiErr *clicore.APIError
+		if errors.As(err, &apiErr) && apiErr.Message != "" {
+			return errors.New(apiErr.Message)
+		}
+		return err
+	}
+	return nil
+}
+
+// SetTrustMode downgrades a device to "ask" through the account. "auto" widens
+// trust and must go through TrustDevice/VerifyTrust; the UI routes it there.
 func (a *App) SetTrustMode(fingerprint, mode string) error {
-	return lanid.SetMode(fingerprint, mode)
+	if lanidNormalize(mode) == lanid.ModeAuto {
+		return errors.New("switching to auto needs verification")
+	}
+	c, err := a.clientOrErr()
+	if err != nil {
+		return errors.New("sign in to change trusted devices")
+	}
+	return c.TrustSetMode(a.ctx, fingerprint, lanid.ModeAsk)
 }
 
-// UntrustDevice revokes trust for a device.
+// UntrustDevice revokes trust for a device on the account.
 func (a *App) UntrustDevice(fingerprint string) error {
-	return lanid.Untrust(fingerprint)
+	c, err := a.clientOrErr()
+	if err != nil {
+		return errors.New("sign in to change trusted devices")
+	}
+	return c.TrustRevoke(a.ctx, fingerprint)
+}
+
+func lanidNormalize(mode string) string {
+	m, err := lanid.NormalizeMode(mode)
+	if err != nil {
+		return lanid.ModeAsk
+	}
+	return m
 }
 
 // TrustedDeviceView is a trusted device with its effective mode resolved
@@ -629,8 +688,12 @@ type TrustedDeviceView struct {
 	Mode        string `json:"mode"`
 }
 
-// ListTrusted returns the trusted devices for the Settings management list.
+// ListTrusted syncs the account's trusted devices (best-effort; offline keeps the
+// verified cache) and returns them for the Settings list.
 func (a *App) ListTrusted() []TrustedDeviceView {
+	if c, err := a.clientOrErr(); err == nil && !c.IsAPIToken() {
+		_ = c.TrustSync(a.ctx)
+	}
 	list := lanid.List()
 	out := make([]TrustedDeviceView, 0, len(list))
 	for _, d := range list {
