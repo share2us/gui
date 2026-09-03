@@ -16,14 +16,16 @@ import (
 	"time"
 
 	"github.com/gen2brain/beeep"
+	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/gui/internal/autostart"
 	"github.com/share2us/gui/internal/clip"
 	"github.com/share2us/gui/internal/core"
 	"github.com/share2us/gui/internal/lan"
-	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/shell"
 	"github.com/share2us/gui/internal/update"
+
+	clicore "github.com/share2us/cli-core"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -47,13 +49,13 @@ type App struct {
 	lanRecv *lan.Receiver // an active one-shot local-network receiver, if any
 
 	discMu       sync.Mutex
-	discRecv     *lan.Receiver          // persistent discoverable serve loop, if on
-	discoverable bool                   // whether we are advertising + serving
-	reqs         map[string]chan bool   // pending approval prompts, by id
+	discRecv     *lan.Receiver        // persistent discoverable serve loop, if on
+	discoverable bool                 // whether we are advertising + serving
+	reqs         map[string]chan bool // pending approval prompts, by id
 	reqSeq       uint64
-	pendingByIP  map[string]int         // in-flight approval prompts per source IP
-	pendingTotal int                    // in-flight approval prompts overall
-	cooldown     map[string]time.Time   // per-IP auto-reject-until after a decline
+	pendingByIP  map[string]int       // in-flight approval prompts per source IP
+	pendingTotal int                  // in-flight approval prompts overall
+	cooldown     map[string]time.Time // per-IP auto-reject-until after a decline
 
 	bcMu        sync.Mutex
 	broadcaster *lan.Broadcaster      // active broadcast, if any
@@ -747,7 +749,7 @@ func (a *App) ActivityLog() []lanid.ActivityEntry { return lanid.ActivityList() 
 func (a *App) ClearActivity() { lanid.ActivityClear() }
 
 // GetScanInterval / SetScanInterval control the broadcast-discovery scan cadence.
-func (a *App) GetScanInterval() int      { return lanid.GetScanInterval() }
+func (a *App) GetScanInterval() int        { return lanid.GetScanInterval() }
 func (a *App) SetScanInterval(s int) error { return lanid.SetScanInterval(s) }
 
 // firstNonEmptyStr returns a if non-empty, else b.
@@ -886,14 +888,49 @@ func (a *App) IsStoreManaged() bool {
 // CheckUpdate reports whether a newer Share2Us release is available for this OS.
 // Store-managed copies never self-update, so it always reports none available.
 func (a *App) CheckUpdate() update.Info {
+	channel := a.UpdateChannel()
 	if update.IsStoreManaged() {
-		return update.Info{Current: buildVersion}
+		return update.Info{Current: buildVersion, Channel: channel}
 	}
-	info, err := update.Check(a.ctx, buildVersion)
+	info, err := update.Check(a.ctx, buildVersion, channel)
 	if err != nil {
-		return update.Info{Current: buildVersion}
+		return update.Info{Current: buildVersion, Channel: channel}
 	}
 	return info
+}
+
+// UpdateChannel is the release channel this machine follows ("stable" or
+// "beta"). It is the CLI's setting too: both read update_channel from the shared
+// cli-core config.json, so `s2u update --channel beta` and this toggle are one
+// machine-wide choice. Store-managed installs always report stable.
+func (a *App) UpdateChannel() string {
+	if update.IsStoreManaged() {
+		return update.ChannelStable
+	}
+	cfg, err := clicore.LoadConfig()
+	if err != nil {
+		return update.ChannelStable
+	}
+	return update.NormalizeChannel(clicore.ResolveUpdateChannel(cfg))
+}
+
+// SetUpdateChannel saves the channel ("stable" or "beta") to the shared config.
+// Stable is stored as the empty default so config.json stays minimal.
+func (a *App) SetUpdateChannel(channel string) error {
+	if update.IsStoreManaged() {
+		return nil
+	}
+	cfg, err := clicore.LoadConfig()
+	if err != nil {
+		cfg = clicore.Config{}
+	}
+	switch update.NormalizeChannel(channel) {
+	case update.ChannelBeta:
+		cfg.UpdateChannel = clicore.UpdateChannelBeta
+	default:
+		cfg.UpdateChannel = ""
+	}
+	return clicore.SaveConfig(cfg)
 }
 
 // ApplyUpdate downloads and launches the update. On Windows it runs the installer
@@ -903,7 +940,7 @@ func (a *App) ApplyUpdate() error {
 	if update.IsStoreManaged() {
 		return nil // the Microsoft Store applies updates; never self-update
 	}
-	info, err := update.Check(a.ctx, buildVersion)
+	info, err := update.Check(a.ctx, buildVersion, a.UpdateChannel())
 	if err != nil {
 		return err
 	}
