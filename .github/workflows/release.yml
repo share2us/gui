@@ -277,6 +277,11 @@ jobs:
     if: ${{ always() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      # The release notes come from CHANGELOG.md, so this job needs the repo, not
+      # just the build artifacts. Without it the file is simply absent, which the
+      # notes step used to report as "[Unreleased] is empty" — the right refusal
+      # for the wrong reason, and a confusing one to debug.
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with: { path: staging, pattern: "pkg-*", merge-multiple: true }
       - name: Publish release
@@ -293,8 +298,15 @@ jobs:
           # release FAILS when it is empty, so a build cannot reach users
           # without saying what changed.
           NOTES_FILE=notes.md
+          # Distinguish "no CHANGELOG.md at all" from "the section is empty": they
+          # need different fixes, and conflating them sent me looking at the wrong
+          # one.
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::error::CHANGELOG.md is missing from the checkout - the publish job cannot read release notes."
+            exit 1
+          fi
           unreleased() { awk '/^## \[Unreleased\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md | sed '/<!--/,/-->/d'; }
-          if [ -f CHANGELOG.md ] && unreleased | grep -q '[^[:space:]]'; then
+          if unreleased | grep -q '[^[:space:]]'; then
             unreleased > "$NOTES_FILE"
           else
             if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
