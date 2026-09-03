@@ -23,7 +23,7 @@ type ShareRequest = {
 };
 type ShareOutcome = { path: string; ok: boolean; link?: string; error?: string };
 type LoginInfo = { userCode: string; verificationUrl: string; verificationUri: string };
-type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string };
+type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string; channel: string; prerelease: boolean };
 type LanPeer = {
   name: string; addr: string; dest: string; code: string; mode: string;
   fingerprint: string; isBroadcast: boolean; fileName: string; fileSize: number;
@@ -52,6 +52,8 @@ interface AppBackend {
   CheckUpdate(): Promise<UpdateInfo>;
   ApplyUpdate(): Promise<void>;
   IsStoreManaged(): Promise<boolean>;
+  UpdateChannel(): Promise<string>;
+  SetUpdateChannel(channel: string): Promise<void>;
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
   LanBrowse(): Promise<LanPeer[]>;
   SetDiscoverable(on: boolean): Promise<void>;
@@ -88,6 +90,7 @@ const state = {
   theme: 'dark' as 'dark' | 'light',
   update: null as UpdateInfo | null,
   storeManaged: false as boolean, // Microsoft Store build/install -> updater hidden
+  updateChannel: 'stable' as string, // 'stable' | 'beta'; shared with the CLI via config.json
 
   scanInterval: 60 as number,
   // share modal
@@ -123,6 +126,7 @@ async function boot() {
     state.paths = paths || [];
     state.scanInterval = await backend().GetScanInterval().catch(() => 60);
     state.storeManaged = await backend().IsStoreManaged().catch(() => false);
+    state.updateChannel = await backend().UpdateChannel().catch(() => 'stable');
     state.bc = await backend().BroadcastStats().catch(() => null);
     if (state.bc && !state.bc.active) state.bc = null;
     // Opened via the Share verb with files -> jump straight to the Share modal.
@@ -392,7 +396,8 @@ function updateBanner(): string {
   if (state.storeManaged) return '';
   const u = state.update;
   if (!u?.available) return '';
-  return `<div class="update-bar"><span>Update available — <strong>v${escapeHtml(u.latest)}</strong></span><button class="btn-mini" id="apply-update">Install</button></div>`;
+  const kind = u.prerelease ? 'Beta update available' : 'Update available';
+  return `<div class="update-bar"><span>${kind} — <strong>v${escapeHtml(u.latest)}</strong></span><button class="btn-mini" id="apply-update">Install</button></div>`;
 }
 function loginProgress(): string {
   if (state.loginPhase === 'waiting') {
@@ -434,6 +439,7 @@ function settingsBlock(): string {
       <div class="chk2">Broadcast scan interval <select id="scan-interval">${[15, 30, 60, 120, 0].map((v) => `<option value="${v}" ${state.scanInterval === v ? 'selected' : ''}>${v === 0 ? 'manual only' : 'every ' + v + 's'}</option>`).join('')}</select></div>
       <label class="setting-row"><input type="checkbox" id="set-shell" ${s.shellInstalled ? 'checked' : ''} /><span class="setting-label">Right-click Share menu</span></label>
       <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${s.autostartEnabled ? 'checked' : ''} ${s.canReceive ? '' : 'disabled'} /><span class="setting-label">Auto-receive files at login</span></label>
+      <label class="setting-row${state.storeManaged ? ' is-disabled' : ''}"><input type="checkbox" id="set-beta" ${state.updateChannel === 'beta' ? 'checked' : ''} ${state.storeManaged ? 'disabled' : ''} /><span class="setting-label">Get beta builds<span class="setting-help">${state.storeManaged ? 'The Microsoft Store manages updates for this install.' : 'Pre-release builds before they reach everyone. Also switches the s2u command line on this machine.'}</span></span></label>
       ${trustedBlock()}
       ${state.activity.length ? `<button class="btn-mini" id="clear-activity">Clear activity log</button>` : ''}
     </div>
@@ -626,6 +632,7 @@ function wire() {
   si?.addEventListener('change', async () => { state.scanInterval = Number(si.value); try { await backend().SetScanInterval(state.scanInterval); } catch { /* */ } startScanTimer(); });
   wireToggle('set-shell', (o) => backend().SetShellIntegration(o));
   wireToggle('set-autostart', (o) => backend().SetAutostart(o));
+  wireToggle('set-beta', async (o) => { await backend().SetUpdateChannel(o ? 'beta' : 'stable'); state.updateChannel = o ? 'beta' : 'stable'; state.update = null; render(); checkForUpdate(); });
   on('.trusted-revoke', 'click', async (e) => { try { await backend().UntrustDevice((e.currentTarget as HTMLElement).dataset.fp || ''); } catch { /* */ } loadTrusted(); });
   root.querySelector('#clear-activity')?.addEventListener('click', async () => { try { await backend().ClearActivity(); } catch { /* */ } state.activity = []; render(); });
 }

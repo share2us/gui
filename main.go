@@ -18,6 +18,8 @@ import (
 	"github.com/share2us/gui/internal/singleton"
 	"github.com/share2us/gui/internal/tray"
 	"github.com/share2us/gui/internal/update"
+
+	clicore "github.com/share2us/cli-core"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -209,7 +211,7 @@ func runTray() {
 	// One-shot update check: toast + reveal the tray "Update available" item.
 	updateReady := make(chan string, 1)
 	go func() {
-		if info, err := update.Check(ctx, buildVersion); err == nil && info.Available {
+		if info, err := update.Check(ctx, buildVersion, startupUpdateChannel()); err == nil && info.Available {
 			_ = beeep.Notify("Share2Us update", "Version "+info.Latest+" is available — open Share2Us to install.", "")
 			select {
 			case updateReady <- info.Latest:
@@ -279,4 +281,14 @@ func runWindow(app *App) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err.Error())
 	}
+}
+
+// startupUpdateChannel mirrors App.UpdateChannel for the tray's one-shot check:
+// the shared cli-core config.json decides, stable when unset or unreadable.
+func startupUpdateChannel() string {
+	cfg, err := clicore.LoadConfig()
+	if err != nil {
+		return update.ChannelStable
+	}
+	return update.NormalizeChannel(clicore.ResolveUpdateChannel(cfg))
 }
