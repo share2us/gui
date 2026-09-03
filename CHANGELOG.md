@@ -20,6 +20,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Security
+- Windows updates from the direct download are now pinned to the publisher's
+  signing certificate: an update signed by a different certificate is refused
+  even if it also names Share2.us. Requires a stable signing certificate in CI;
+  builds made without one keep verifying by checksum alone. The Microsoft Store
+  package is unaffected — the Store signs it, and Store builds have no updater.
+
 ### Fixed
 - The Windows in-app updater could never install an update. It required a
   `Valid` Authenticode status, but the installer stopped importing the signing

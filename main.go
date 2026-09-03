@@ -41,6 +41,17 @@ var trayIconPNG []byte
 //	go build -ldflags "-X main.buildVersion=$(date -u +%Y%m%d%H%M%S)"
 var buildVersion = "dev"
 
+// expectedSignerThumbprint is the SHA-1 thumbprint of the code-signing
+// certificate this build was signed with, stamped by CI via -ldflags.
+//
+// The Windows updater refuses an update signed by any other certificate, which
+// is what gives the direct-download channel a verifiable publisher across
+// releases. Empty when the release ran without a stable signing certificate
+// configured, and the updater then falls back to checksum verification alone.
+//
+// Store builds never set it: their updater is compiled out entirely.
+var expectedSignerThumbprint = ""
+
 // main handles the CLI verbs before opening the window:
 //
 //	share2us-gui.exe share "<path>" ["<path>" ...]   (from the file-manager verb)
@@ -50,6 +61,7 @@ var buildVersion = "dev"
 //
 // With no verb it opens the share window.
 func main() {
+	update.SetPinnedThumbprint(expectedSignerThumbprint)
 	pending, quit := parseArgs(os.Args[1:])
 	if quit {
 		return

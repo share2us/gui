@@ -12,5 +12,5 @@ type Info struct {
 	// has none). The updater verifies the download against it before running
 	// anything — see VerifyChecksum.
 	SHA256URL string `json:"sha256Url"`
-	Page      string `json:"page"`      // release page (fallback)
+	Page      string `json:"page"` // release page (fallback)
 }

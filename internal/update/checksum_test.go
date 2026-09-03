@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -95,5 +96,25 @@ func TestInfoLeavesChecksumEmptyWhenReleaseHasNone(t *testing.T) {
 	}
 	if got := infoFrom(rel, "20260101000000", "windows", "amd64").SHA256URL; got != "" {
 		t.Fatalf("SHA256URL = %q, want empty", got)
+	}
+}
+
+func TestThumbprintAccepted(t *testing.T) {
+	const pin = "AABBCCDDEEFF00112233445566778899AABBCCDD"
+	cases := []struct {
+		name           string
+		pinned, actual string
+		want           bool
+	}{
+		{"unpinned build accepts (checksum is the gate)", "", "whatever", true},
+		{"same cert accepts", pin, pin, true},
+		{"case and spacing are irrelevant", pin, "  " + strings.ToLower(pin) + " ", true},
+		{"a DIFFERENT cert is refused even if it also says Share2.us", pin, "0000000000000000000000000000000000000000", false},
+		{"pinned build refuses an unsigned update", pin, "", false},
+	}
+	for _, tt := range cases {
+		if got := thumbprintAccepted(tt.pinned, tt.actual); got != tt.want {
+			t.Fatalf("%s: got %v want %v", tt.name, got, tt.want)
+		}
 	}
 }

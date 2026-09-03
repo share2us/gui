@@ -117,6 +117,46 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm ci && npm run build
+      - name: Prepare signing certificate
+        shell: pwsh
+        run: |
+          # Signs the DIRECT-DOWNLOAD artifacts only: share2us-gui.exe, the s2u CLI
+          # and (later) Setup.exe. It does NOT sign the MSIX, and must not: the MSIX
+          # Publisher is the Partner Center identity (CN=<GUID>), the Store re-signs
+          # it with its own trusted certificate on ingestion, and it is uploaded
+          # UNSIGNED. Nothing in this step may touch the MSIX or its manifest.
+          #
+          # Prefer a STABLE certificate from secrets. A per-run
+          # New-SelfSignedCertificate gives every release a different, unrelated
+          # keypair, so an installed client has no way to tell that an update was
+          # signed by the same publisher as the build it is running — which is why
+          # the updater could never verify anything (see internal/update).
+          # With a stable key the thumbprint is baked into the binary and the
+          # updater refuses a release signed by anything else.
+          #
+          # Falls back to the old per-run cert when the secret is absent, so a fork
+          # or a repo without the secret still produces working (just unpinned)
+          # builds rather than failing.
+          $pfxB64 = "${{ secrets.SIGN_PFX_B64 }}"
+          if ($pfxB64) {
+            $pfxPath = Join-Path $env:RUNNER_TEMP 'share2us-signing.pfx'
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($pfxB64))
+            $pw = ConvertTo-SecureString "${{ secrets.SIGN_PFX_PASSWORD }}" -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+            Remove-Item $pfxPath -Force
+            "SIGN_PINNED=$($cert.Thumbprint)" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+            Write-Host "signing with the stable certificate (thumbprint pinned into the build)"
+          } else {
+            $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+              -Subject "CN=Share2.us, O=Share2.us" `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -KeyUsage DigitalSignature -HashAlgorithm SHA256 `
+              -TextExtension @("2.5.29.19={text}") `
+              -NotAfter (Get-Date).AddYears(5)
+            Write-Host "::warning::SIGN_PFX_B64 is not set - falling back to a per-run self-signed cert. Updates from this build cannot be publisher-verified."
+          }
+          "SIGN_THUMB=$($cert.Thumbprint)" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
+
       - name: wails build + fetch CLI
         shell: bash
         run: |
@@ -124,8 +164,11 @@ jobs:
           wails="$(go env GOPATH)/bin/wails"
           # 1) Normal build -> the direct-download binary for Setup.exe. Keeps the
           #    in-app updater (self-updates from GitHub Releases).
+          # expectedSignerThumbprint pins the publisher: this binary will refuse an
+          # update signed by any other certificate. Empty when SIGN_PFX_B64 is not
+          # configured, which leaves the old unpinned behaviour.
           "$wails" build -platform windows/amd64 -s -skipbindings \
-            -ldflags "-X main.buildVersion=${{ needs.version.outputs.v }}"
+            -ldflags "-X main.buildVersion=${{ needs.version.outputs.v }} -X main.expectedSignerThumbprint=${SIGN_PINNED:-}"
           mkdir -p dist
           cp build/bin/share2us-gui.exe dist/
           # 2) Store build (-tags store) -> the binary that goes INTO the MSIX. The
@@ -144,19 +187,6 @@ jobs:
       - name: Sign binaries + build MSIX (Store-ready, unsigned)
         shell: pwsh
         run: |
-          # A self-signed cert signs the exe, the s2u CLI and (later) Setup.exe so
-          # they carry a Share2.us signature. It does NOT sign the MSIX: the MSIX
-          # Publisher is now the Partner Center identity (CN=<GUID>), which the
-          # self-signed cert can't match, and the Microsoft Store re-signs the MSIX
-          # with its own trusted cert on ingestion. So the MSIX is published
-          # UNSIGNED for Store upload.
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
-            -Subject "CN=Share2.us, O=Share2.us" `
-            -CertStoreLocation Cert:\CurrentUser\My `
-            -KeyUsage DigitalSignature -HashAlgorithm SHA256 `
-            -TextExtension @("2.5.29.19={text}") `
-            -NotAfter (Get-Date).AddYears(5)
-          "SIGN_THUMB=$($cert.Thumbprint)" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
           $sdk = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64" |
             Sort-Object FullName | Select-Object -Last 1).FullName
           $signtool = Join-Path $sdk 'signtool.exe'
