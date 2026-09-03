@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260903161240] - 2026-09-03
+
 ### Changed
 - Trusted devices now have a mode. When you tick "Trust this device" on an
   incoming request you choose what happens next: **Ask before each transfer**
