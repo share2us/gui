@@ -6,6 +6,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -51,4 +52,48 @@ func (c *Client) IsAPIToken() bool { return clicore.IsAPIToken(c.cred.Token) }
 // receive (decrypt) sealed inbox shares.
 func (c *Client) HasDeviceKey() bool {
 	return c.cred.DevicePublicKey != "" && c.cred.DevicePrivateKey != ""
+}
+
+// ---- LAN device trust (ADR-034) --------------------------------------------
+// Trust lives on the account and needs a second factor; these wrap the API.
+
+// TrustOpen opens a trust challenge for a nearby device (mode ask|auto).
+func (c *Client) TrustOpen(ctx context.Context, fingerprint, name, mode string) (clicore.LanTrustChallenge, error) {
+	return c.api.LanTrustOpen(ctx, fingerprint, name, mode)
+}
+
+// TrustVerify submits the code; on success the signed list is cached locally.
+func (c *Client) TrustVerify(ctx context.Context, challengeID, code string) error {
+	list, err := c.api.LanTrustVerify(ctx, challengeID, code)
+	if err != nil {
+		return err
+	}
+	return clicore.SaveTrustList(list)
+}
+
+// TrustSync refreshes the cached signed list from the account.
+func (c *Client) TrustSync(ctx context.Context) error {
+	list, err := c.api.LanTrusted(ctx)
+	if err != nil {
+		return err
+	}
+	return clicore.SaveTrustList(list)
+}
+
+// TrustSetMode downgrades a device to ask (auto goes through TrustOpen/Verify).
+func (c *Client) TrustSetMode(ctx context.Context, fingerprint, mode string) error {
+	list, err := c.api.LanTrustSetMode(ctx, fingerprint, mode)
+	if err != nil {
+		return err
+	}
+	return clicore.SaveTrustList(list)
+}
+
+// TrustRevoke removes a device from the account's trusted list.
+func (c *Client) TrustRevoke(ctx context.Context, fingerprint string) error {
+	list, err := c.api.LanTrustRevoke(ctx, fingerprint)
+	if err != nil {
+		return err
+	}
+	return clicore.SaveTrustList(list)
 }

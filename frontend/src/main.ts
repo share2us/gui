@@ -30,6 +30,8 @@ type LanPeer = {
 };
 type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string; trusted?: boolean };
 type TrustedDevice = { fingerprint: string; name: string; mode: 'ask' | 'auto' };
+type TrustChallenge = { challengeId: string; factor: string; sentTo: string; verifyCode: string; expiresIn: number };
+type TrustPrompt = TrustChallenge & { fingerprint: string; name: string; mode: string; error: string; busy: boolean };
 type ClipSuggestion = { kind: 'image' | 'text' | 'none'; preview: string; ext: string };
 type Activity = { kind: string; peer: string; name: string; size: number; ts: number; link?: string };
 type BcConn = { fingerprint: string; name: string; peer: string; sent: number; total: number; done: boolean; err: string };
@@ -58,7 +60,8 @@ interface AppBackend {
   LanBrowse(): Promise<LanPeer[]>;
   SetDiscoverable(on: boolean): Promise<void>;
   RespondLanRequest(id: string, accept: boolean): Promise<void>;
-  TrustDevice(fingerprint: string, name: string, mode: string): Promise<void>;
+  TrustDevice(fingerprint: string, name: string, mode: string): Promise<TrustChallenge>;
+  VerifyTrust(challengeId: string, code: string): Promise<void>;
   SetTrustMode(fingerprint: string, mode: string): Promise<void>;
   UntrustDevice(fingerprint: string): Promise<void>;
   ListTrusted(): Promise<TrustedDevice[]>;
@@ -83,6 +86,7 @@ const state = {
   peers: [] as LanPeer[],
   browsing: false as boolean,
   requests: [] as LanRequest[],
+  trustPrompt: null as TrustPrompt | null, // ADR-034 code entry after 'Trust this device'
   activity: [] as Activity[],
   trusted: [] as TrustedDevice[],
   bc: null as BroadcastState | null, // live broadcast
@@ -190,6 +194,7 @@ function renderHome(): void {
       ${settingsBlock()}
     </div>
     ${state.requests.length ? requestOverlay(state.requests[0]) : ''}
+    ${state.trustPrompt && !state.requests.length ? trustCodeOverlay(state.trustPrompt) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
   </div>`;
@@ -409,6 +414,50 @@ function updateBanner(): string {
   const kind = u.prerelease ? 'Beta update available' : 'Update available';
   return `<div class="update-bar"><span>${kind} — <strong>v${escapeHtml(u.latest)}</strong></span><button class="btn-mini" id="apply-update">Install</button></div>`;
 }
+// ADR-034: the second factor. The transfer has already been answered; this only
+// decides whether the device becomes trusted.
+function trustCodeOverlay(p: TrustPrompt): string {
+  const how = p.factor === 'totp'
+    ? 'Enter the 6-digit code from your authenticator app.'
+    : `We emailed a 6-digit code to <b>${escapeHtml(p.sentTo)}</b>. The email also shows this device's code <b>${escapeHtml(p.verifyCode)}</b> — make sure it matches.`;
+  const what = p.mode === 'auto' ? 'its files will be saved automatically' : 'it will still ask before each transfer, without a code';
+  return `<div class="overlay"><div class="overlay-card">
+    <div class="overlay-title">Confirm trusting ${escapeHtml(p.name || p.fingerprint.slice(0, 10))}</div>
+    <div class="overlay-body"><div class="hint">${how}</div><div class="hint">Once confirmed, ${what}.</div>
+      <input id="trust-code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123 456" ${p.busy ? 'disabled' : ''} />
+      <div class="hint trust-error" style="min-height:1.2em">${escapeHtml(p.error)}</div>
+    </div>
+    <div class="overlay-actions"><button class="btn-hdr" id="trust-cancel" ${p.busy ? 'disabled' : ''}>Not now</button><button class="btn-accept" id="trust-verify" ${p.busy ? 'disabled' : ''}>${p.busy ? 'Checking…' : 'Confirm'}</button></div>
+  </div></div>`;
+}
+
+// startTrust opens the challenge and shows the code prompt. Errors (not signed
+// in, API token, offline) surface as a toast; nothing is trusted.
+async function startTrust(fingerprint: string, name: string, mode: string) {
+  try {
+    const ch = await backend().TrustDevice(fingerprint, name, mode);
+    state.trustPrompt = { ...ch, fingerprint, name, mode, error: '', busy: false };
+    render();
+    root.querySelector<HTMLInputElement>('#trust-code')?.focus();
+  } catch (e) { toast('Cannot trust this device: ' + String(e)); }
+}
+
+async function submitTrustCode() {
+  const p = state.trustPrompt; if (!p || p.busy) return;
+  const code = (root.querySelector<HTMLInputElement>('#trust-code')?.value || '').replace(/\s+/g, '');
+  if (!code) { p.error = 'Enter the code.'; render(); return; }
+  p.busy = true; p.error = ''; render();
+  try {
+    await backend().VerifyTrust(p.challengeId, code);
+    state.trustPrompt = null; render();
+    toast(`Trusted ${p.name || 'device'}${p.mode === 'auto' ? ' — files save automatically' : ''}`);
+    loadTrusted();
+  } catch (e) {
+    p.busy = false; p.error = String(e).replace(/^Error:\s*/, ''); render();
+    root.querySelector<HTMLInputElement>('#trust-code')?.focus();
+  }
+}
+
 function loginProgress(): string {
   if (state.loginPhase === 'waiting') {
     const info = state.loginInfo;
@@ -457,7 +506,7 @@ function settingsBlock(): string {
 }
 function trustedBlock(): string {
   if (!state.trusted.length) return '';
-  return `<div class="trusted-list"><div class="setting-label">Trusted devices <span class="hint">no code to compare; "ask" still approves each file, "auto" saves without asking</span></div>${state.trusted.map((d) => `<div class="trusted-row"><span class="trusted-name" title="${escapeHtml(d.fingerprint)}">${escapeHtml(d.name || d.fingerprint.slice(0, 10))}</span><select class="trusted-mode" data-fp="${escapeHtml(d.fingerprint)}" title="What happens when this device sends a file"><option value="ask" ${d.mode === 'auto' ? '' : 'selected'}>Ask each time</option><option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>Save automatically</option></select><button class="btn-mini trusted-revoke" data-fp="${escapeHtml(d.fingerprint)}">Revoke</button></div>`).join('')}</div>`;
+  return `<div class="trusted-list"><div class="setting-label">Trusted devices <span class="hint">on your account; trusting or switching to "auto" asks for a verification code</span></div>${state.trusted.map((d) => `<div class="trusted-row"><span class="trusted-name" title="${escapeHtml(d.fingerprint)}">${escapeHtml(d.name || d.fingerprint.slice(0, 10))}</span><select class="trusted-mode" data-fp="${escapeHtml(d.fingerprint)}" title="What happens when this device sends a file"><option value="ask" ${d.mode === 'auto' ? '' : 'selected'}>Ask each time</option><option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>Save automatically</option></select><button class="btn-mini trusted-revoke" data-fp="${escapeHtml(d.fingerprint)}">Revoke</button></div>`).join('')}</div>`;
 }
 
 // ---- Primary button (share modal) ------------------------------------------
@@ -549,8 +598,8 @@ async function doDownload() {
   toast('Downloading ' + p.fileName + '…');
   try {
     const res = await backend().LanDownload(p.addr, p.fingerprint, p.fileName, p.fileSize);
-    if (wantTrust && res.fingerprint) await backend().TrustDevice(res.fingerprint, p.name, 'ask').catch(() => {});
     await refreshActivity(); loadTrusted();
+    if (wantTrust && res.fingerprint) startTrust(res.fingerprint, p.name, 'ask');
   } catch (e) { toast('Download failed: ' + String(e)); }
 }
 
@@ -621,11 +670,11 @@ function wire() {
   root.querySelector('#req-reject')?.addEventListener('click', () => respondRequest(false));
   root.querySelector('#req-accept')?.addEventListener('click', async () => {
     const r = state.requests[0];
-    if (r && root.querySelector<HTMLInputElement>('#req-trust')?.checked && r.fingerprint) {
-      const mode = root.querySelector<HTMLSelectElement>('#req-trust-mode')?.value === 'auto' ? 'auto' : 'ask';
-      try { await backend().TrustDevice(r.fingerprint, r.senderName || r.from, mode); loadTrusted(); } catch { /* */ }
-    }
-    respondRequest(true);
+    const wantTrust = !!(r && root.querySelector<HTMLInputElement>('#req-trust')?.checked && r.fingerprint);
+    const mode = root.querySelector<HTMLSelectElement>('#req-trust-mode')?.value === 'auto' ? 'auto' : 'ask';
+    // Answer the sender first (it is waiting), then collect the second factor.
+    await respondRequest(true);
+    if (wantTrust && r) startTrust(r.fingerprint, r.senderName || r.from, mode);
   });
   // download confirm overlay
   root.querySelector('#dl-cancel')?.addEventListener('click', () => { state.dl = null; render(); });
@@ -646,8 +695,15 @@ function wire() {
   wireToggle('set-shell', (o) => backend().SetShellIntegration(o));
   wireToggle('set-autostart', (o) => backend().SetAutostart(o));
   wireToggle('set-beta', async (o) => { await backend().SetUpdateChannel(o ? 'beta' : 'stable'); state.updateChannel = o ? 'beta' : 'stable'; state.update = null; render(); checkForUpdate(); });
-  on('.trusted-revoke', 'click', async (e) => { try { await backend().UntrustDevice((e.currentTarget as HTMLElement).dataset.fp || ''); } catch { /* */ } loadTrusted(); });
-  on('.trusted-mode', 'change', async (e) => { const el = e.currentTarget as HTMLSelectElement; try { await backend().SetTrustMode(el.dataset.fp || '', el.value); } catch { /* */ } loadTrusted(); });
+  on('.trusted-revoke', 'click', async (e) => { try { await backend().UntrustDevice((e.currentTarget as HTMLElement).dataset.fp || ''); } catch (err) { toast(String(err)); } loadTrusted(); });
+  on('.trusted-mode', 'change', async (e) => {
+    const el = e.currentTarget as HTMLSelectElement; const fp = el.dataset.fp || '';
+    if (el.value === 'auto') { const d = state.trusted.find((t) => t.fingerprint === fp); startTrust(fp, d?.name || '', 'auto'); loadTrusted(); return; } // widening: needs the code
+    try { await backend().SetTrustMode(fp, 'ask'); } catch (err) { toast(String(err)); } loadTrusted();
+  });
+  root.querySelector('#trust-cancel')?.addEventListener('click', () => { state.trustPrompt = null; render(); });
+  root.querySelector('#trust-verify')?.addEventListener('click', submitTrustCode);
+  root.querySelector('#trust-code')?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') submitTrustCode(); });
   root.querySelector('#clear-activity')?.addEventListener('click', async () => { try { await backend().ClearActivity(); } catch { /* */ } state.activity = []; render(); });
 }
 

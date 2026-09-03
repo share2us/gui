@@ -16,6 +16,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Security
+- Trusting a nearby device now requires verification through your account
+  (ADR-034). After you tick "Trust this device" and accept, Share2Us emails a
+  6-digit code to your account address (or asks for your authenticator code
+  once you enrol one); the device is trusted only after you confirm it. Trusted
+  devices are kept on your account, signed by the server and synced to your
+  signed-in machines; a hand-edited local copy is ignored, so an automation or
+  AI agent cannot trust devices on its own. Devices trusted before this release
+  were never verified this way and are **not carried over**: trust them again
+  once. Switching a device to "Save automatically" also asks for a code;
+  switching back and revoking do not. Requires being signed in.
+
 ## [20260903161240] - 2026-09-03
 
 ### Changed

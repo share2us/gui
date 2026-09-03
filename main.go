@@ -20,6 +20,7 @@ import (
 	"github.com/share2us/gui/internal/update"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/lanid"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -208,6 +209,8 @@ func runTray() {
 			}
 		})
 	}
+	// ADR-034: the pre-MFA local trust file is not migrated (never factor-verified).
+	lanid.RemoveLegacyTrustFile()
 	// One-shot update check: toast + reveal the tray "Update available" item.
 	updateReady := make(chan string, 1)
 	go func() {
