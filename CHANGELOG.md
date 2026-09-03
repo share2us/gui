@@ -8,14 +8,34 @@ build cannot reach users without saying what changed. On release, move the
 section under a new version heading. HTML comments do not count as content, so
 a section holding only a note still blocks a stable release.
 
-Changes already on `main` but never described in any release (the broadcast /
-home-feed redesign, transfer resume, and the LAN security pass) should be
-written up before the next stable goes out.
+`[Unreleased]` is genuinely empty right now, and that is correct: the last
+release (`v20260801223900`, 2026-08-01) already contains everything on `main`
+except the release-workflow change itself, which is not user-facing. The
+broadcast / home-feed redesign, transfer resume and the LAN security pass all
+shipped before that tag — they were released without written notes, which is the
+gap this file closes going forward, not a backlog of unreleased work.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
+
+### Security
+- Windows updates from the direct download are now pinned to the publisher's
+  signing certificate: an update signed by a different certificate is refused
+  even if it also names Share2.us. Requires a stable signing certificate in CI;
+  builds made without one keep verifying by checksum alone. The Microsoft Store
+  package is unaffected — the Store signs it, and Store builds have no updater.
+
+### Fixed
+- The Windows in-app updater could never install an update. It required a
+  `Valid` Authenticode status, but the installer stopped importing the signing
+  certificate (removed because adding a root CA is what made Defender flag the
+  installer as malware), and the release workflow mints a new self-signed
+  certificate on every run — so the signature chains to nothing and always reads
+  `UnknownError`. Every update offered to a Windows user was refused at that
+  gate. Integrity is now verified against a SHA-256 published alongside the
+  installer, which the release did not previously include.
 
 ## Earlier
 

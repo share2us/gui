@@ -8,5 +8,9 @@ type Info struct {
 	Latest    string `json:"latest"`
 	AssetURL  string `json:"assetUrl"`  // installer/archive for this OS ("" if none)
 	AssetName string `json:"assetName"` // its filename
-	Page      string `json:"page"`      // release page (fallback)
+	// SHA256URL is the published .sha256 sibling of AssetURL ("" when the release
+	// has none). The updater verifies the download against it before running
+	// anything — see VerifyChecksum.
+	SHA256URL string `json:"sha256Url"`
+	Page      string `json:"page"` // release page (fallback)
 }

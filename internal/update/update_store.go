@@ -2,7 +2,10 @@
 
 package update
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 // Check is a no-op in the Store build: the Microsoft Store owns distribution and
 // updates for the MSIX, so the app must never poll GitHub or self-update (Store
@@ -10,3 +13,8 @@ import "context"
 func Check(_ context.Context, current string) (Info, error) {
 	return Info{Current: current, Available: false}, nil
 }
+
+// VerifyChecksum is a no-op in the Store build for the same reason as Check: the
+// Store owns updates, so nothing is ever downloaded here to verify. It mirrors
+// VerifySignature's store stub so app.go compiles unchanged under -tags store.
+func VerifyChecksum(_ context.Context, _ *http.Client, _, _ string) error { return nil }

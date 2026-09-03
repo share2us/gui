@@ -68,7 +68,20 @@ func infoFrom(rel ghRelease, current, goos, goarch string) Info {
 	// (timestamps are fixed-width, so this equals numeric order).
 	info.Available = current != "" && current != "dev" && latest != "" && latest > current
 	info.AssetName, info.AssetURL = pickAsset(rel, goos, goarch)
+	if info.AssetName != "" {
+		info.SHA256URL = assetURL(rel, info.AssetName+".sha256")
+	}
 	return info
+}
+
+// assetURL returns the download URL of a release asset by exact name, or "".
+func assetURL(rel ghRelease, name string) string {
+	for _, a := range rel.Assets {
+		if a.Name == name {
+			return a.URL
+		}
+	}
+	return ""
 }
 
 func pickAsset(rel ghRelease, goos, goarch string) (name, url string) {
