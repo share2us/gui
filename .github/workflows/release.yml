@@ -13,7 +13,29 @@ name: release
 #                     installed clients by construction. This is the staging
 #                     channel.
 #   channel=stable -> --latest. Users get it on their next update check.
+# A merge to `main` publishes a STABLE release. Safe now in a way it was not
+# before: `main` is reached only through a reviewed PR from a release branch,
+# after the work has been exercised on local `staging`, so a merge IS the decision
+# to ship. Before, `main` doubled as the working branch.
+#
+# The changelog gate still applies — a stable release FAILS when
+# CHANGELOG.md's [Unreleased] section is empty, so a merge cannot ship silence.
+#
+# workflow_dispatch stays for BETA: a push carries no channel choice.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "frontend/**"
+      - "build/**"
+      - "wails.json"
+      - "installer/**"
+      # NOT .github/workflows/release.yml. Editing CI must not ship a release to
+      # users — that path was here so workflow changes could be exercised, and
+      # workflow_dispatch does that job now without touching anybody's install.
   workflow_dispatch:
     inputs:
       channel:
@@ -275,7 +297,7 @@ jobs:
           if [ -f CHANGELOG.md ] && unreleased | grep -q '[^[:space:]]'; then
             unreleased > "$NOTES_FILE"
           else
-            if [ "${{ inputs.channel }}" = stable ]; then
+            if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
               echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
               exit 1
             fi
@@ -288,7 +310,7 @@ jobs:
             echo "macOS: unzip the .app (unsigned — right-click → Open the first time)."
           } >> "$NOTES_FILE"
 
-          if [ "${{ inputs.channel }}" = stable ]; then
+          if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
             LATEST_FLAGS="--latest"
           else
             LATEST_FLAGS="--prerelease --latest=false"
