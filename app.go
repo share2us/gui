@@ -522,8 +522,13 @@ func (a *App) approveDownload(r lan.Request) bool { return a.gate(r, "download")
 // and the user is prompted. action ("send"|"download") only affects prompt wording.
 func (a *App) gate(r lan.Request, action string) bool {
 	if r.Fingerprint != "" {
-		if _, ok := lanid.Lookup(r.Fingerprint); ok {
-			return true // trusted = auto-accept
+		if d, ok := lanid.Lookup(r.Fingerprint); ok {
+			if d.AutoAccept() {
+				return true // trusted + auto: lands silently (toast on arrival)
+			}
+			// trusted + ask: no verify code, no anti-spam caps, one tap to accept.
+			r.Trusted = true
+			return a.promptApproval(r, action)
 		}
 	}
 
@@ -583,6 +588,7 @@ func (a *App) promptApproval(r lan.Request, action string) bool {
 	wailsRuntime.EventsEmit(a.ctx, "lan-request", map[string]any{
 		"id": id, "from": r.From, "name": r.Name, "size": r.Size,
 		"fingerprint": r.Fingerprint, "senderName": r.SenderName, "code": r.Code, "action": action,
+		"trusted": r.Trusted,
 	})
 
 	ok := false
@@ -599,9 +605,15 @@ func (a *App) promptApproval(r lan.Request, action string) bool {
 }
 
 // TrustDevice adds a device (by verified key fingerprint) to the trusted list
-// (trusted = auto-accept, revocable). Called from "Accept & trust".
-func (a *App) TrustDevice(fingerprint, name string) error {
-	return lanid.Trust(fingerprint, name)
+// with a mode: "ask" (default; one-tap approval per transfer, no code) or
+// "auto" (its transfers are saved without asking). Revocable.
+func (a *App) TrustDevice(fingerprint, name, mode string) error {
+	return lanid.TrustWithMode(fingerprint, name, mode)
+}
+
+// SetTrustMode changes the mode of an already-trusted device ("ask" | "auto").
+func (a *App) SetTrustMode(fingerprint, mode string) error {
+	return lanid.SetMode(fingerprint, mode)
 }
 
 // UntrustDevice revokes trust for a device.
@@ -609,9 +621,22 @@ func (a *App) UntrustDevice(fingerprint string) error {
 	return lanid.Untrust(fingerprint)
 }
 
+// TrustedDeviceView is a trusted device with its effective mode resolved
+// (legacy records without a mode read as "ask").
+type TrustedDeviceView struct {
+	Fingerprint string `json:"fingerprint"`
+	Name        string `json:"name"`
+	Mode        string `json:"mode"`
+}
+
 // ListTrusted returns the trusted devices for the Settings management list.
-func (a *App) ListTrusted() []lanid.TrustedDevice {
-	return lanid.List()
+func (a *App) ListTrusted() []TrustedDeviceView {
+	list := lanid.List()
+	out := make([]TrustedDeviceView, 0, len(list))
+	for _, d := range list {
+		out = append(out, TrustedDeviceView{Fingerprint: d.Fingerprint, Name: d.Name, Mode: d.EffectiveMode()})
+	}
+	return out
 }
 
 // ---- broadcast (pull) ----

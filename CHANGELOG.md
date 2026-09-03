@@ -16,6 +16,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Changed
+- Trusted devices now have a mode. When you tick "Trust this device" on an
+  incoming request you choose what happens next: **Ask before each transfer**
+  (default: one tap per file, no code to compare) or **Save its files
+  automatically**. Devices trusted before this release are treated as "ask".
+  Settings → Trusted devices shows the mode per device and lets you change or
+  revoke it.
+
 ## [20260903141453] - 2026-09-03
 
 ### Added

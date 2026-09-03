@@ -28,8 +28,8 @@ type LanPeer = {
   name: string; addr: string; dest: string; code: string; mode: string;
   fingerprint: string; isBroadcast: boolean; fileName: string; fileSize: number;
 };
-type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string };
-type TrustedDevice = { fingerprint: string; name: string };
+type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string; trusted?: boolean };
+type TrustedDevice = { fingerprint: string; name: string; mode: 'ask' | 'auto' };
 type ClipSuggestion = { kind: 'image' | 'text' | 'none'; preview: string; ext: string };
 type Activity = { kind: string; peer: string; name: string; size: number; ts: number; link?: string };
 type BcConn = { fingerprint: string; name: string; peer: string; sent: number; total: number; done: boolean; err: string };
@@ -58,7 +58,8 @@ interface AppBackend {
   LanBrowse(): Promise<LanPeer[]>;
   SetDiscoverable(on: boolean): Promise<void>;
   RespondLanRequest(id: string, accept: boolean): Promise<void>;
-  TrustDevice(fingerprint: string, name: string): Promise<void>;
+  TrustDevice(fingerprint: string, name: string, mode: string): Promise<void>;
+  SetTrustMode(fingerprint: string, mode: string): Promise<void>;
   UntrustDevice(fingerprint: string): Promise<void>;
   ListTrusted(): Promise<TrustedDevice[]>;
   StartBroadcast(path: string, access: string): Promise<BroadcastState>;
@@ -368,8 +369,17 @@ function accessLabel(a: string): string { return a === 'all' ? 'Allow all' : a =
 function requestOverlay(r: LanRequest): string {
   const who = escapeHtml(r.senderName || r.from);
   const verb = r.action === 'download' ? 'wants to download' : 'wants to send you';
-  const trustBox = r.fingerprint
-    ? `<label class="chk-trust"><input type="checkbox" id="req-trust"> Trust this device — accept automatically from now on</label>
+  // Three shapes, same slot: trusted (ask mode), untrusted with an identity, anonymous.
+  const trustBox = r.trusted
+    ? `<div class="hint">Trusted device (identity verified) — no code to compare. It asks each time; change that under Settings → Trusted devices.</div>`
+    : r.fingerprint
+    ? `<label class="chk-trust"><input type="checkbox" id="req-trust"> Trust this device (skip the code next time)</label>
+       <label class="chk-trust trust-mode"><span>Then:</span>
+         <select id="req-trust-mode">
+           <option value="ask" selected>Ask before each transfer (recommended)</option>
+           <option value="auto">Save its files automatically</option>
+         </select></label>
+       <div class="hint">Ask keeps a one-tap approval per file, so nothing lands without you seeing it. Auto is for your own devices.</div>
        ${r.code ? `<div class="hint">Device code <b>${escapeHtml(r.code)}</b> — confirm it matches their screen.</div>` : ''}`
     : `<div class="hint">This device has no verified identity — it can't be trusted.</div>`;
   return `<div class="overlay"><div class="overlay-card">
@@ -447,7 +457,7 @@ function settingsBlock(): string {
 }
 function trustedBlock(): string {
   if (!state.trusted.length) return '';
-  return `<div class="trusted-list"><div class="setting-label">Trusted devices <span class="hint">auto-accept, no code</span></div>${state.trusted.map((d) => `<div class="trusted-row"><span class="trusted-name" title="${escapeHtml(d.fingerprint)}">${escapeHtml(d.name || d.fingerprint.slice(0, 10))}</span><button class="btn-mini trusted-revoke" data-fp="${escapeHtml(d.fingerprint)}">Revoke</button></div>`).join('')}</div>`;
+  return `<div class="trusted-list"><div class="setting-label">Trusted devices <span class="hint">no code to compare; "ask" still approves each file, "auto" saves without asking</span></div>${state.trusted.map((d) => `<div class="trusted-row"><span class="trusted-name" title="${escapeHtml(d.fingerprint)}">${escapeHtml(d.name || d.fingerprint.slice(0, 10))}</span><select class="trusted-mode" data-fp="${escapeHtml(d.fingerprint)}" title="What happens when this device sends a file"><option value="ask" ${d.mode === 'auto' ? '' : 'selected'}>Ask each time</option><option value="auto" ${d.mode === 'auto' ? 'selected' : ''}>Save automatically</option></select><button class="btn-mini trusted-revoke" data-fp="${escapeHtml(d.fingerprint)}">Revoke</button></div>`).join('')}</div>`;
 }
 
 // ---- Primary button (share modal) ------------------------------------------
@@ -539,7 +549,7 @@ async function doDownload() {
   toast('Downloading ' + p.fileName + '…');
   try {
     const res = await backend().LanDownload(p.addr, p.fingerprint, p.fileName, p.fileSize);
-    if (wantTrust && res.fingerprint) await backend().TrustDevice(res.fingerprint, p.name).catch(() => {});
+    if (wantTrust && res.fingerprint) await backend().TrustDevice(res.fingerprint, p.name, 'ask').catch(() => {});
     await refreshActivity(); loadTrusted();
   } catch (e) { toast('Download failed: ' + String(e)); }
 }
@@ -611,7 +621,10 @@ function wire() {
   root.querySelector('#req-reject')?.addEventListener('click', () => respondRequest(false));
   root.querySelector('#req-accept')?.addEventListener('click', async () => {
     const r = state.requests[0];
-    if (r && root.querySelector<HTMLInputElement>('#req-trust')?.checked && r.fingerprint) { try { await backend().TrustDevice(r.fingerprint, r.senderName || r.from); loadTrusted(); } catch { /* */ } }
+    if (r && root.querySelector<HTMLInputElement>('#req-trust')?.checked && r.fingerprint) {
+      const mode = root.querySelector<HTMLSelectElement>('#req-trust-mode')?.value === 'auto' ? 'auto' : 'ask';
+      try { await backend().TrustDevice(r.fingerprint, r.senderName || r.from, mode); loadTrusted(); } catch { /* */ }
+    }
     respondRequest(true);
   });
   // download confirm overlay
@@ -634,6 +647,7 @@ function wire() {
   wireToggle('set-autostart', (o) => backend().SetAutostart(o));
   wireToggle('set-beta', async (o) => { await backend().SetUpdateChannel(o ? 'beta' : 'stable'); state.updateChannel = o ? 'beta' : 'stable'; state.update = null; render(); checkForUpdate(); });
   on('.trusted-revoke', 'click', async (e) => { try { await backend().UntrustDevice((e.currentTarget as HTMLElement).dataset.fp || ''); } catch { /* */ } loadTrusted(); });
+  on('.trusted-mode', 'change', async (e) => { const el = e.currentTarget as HTMLSelectElement; try { await backend().SetTrustMode(el.dataset.fp || '', el.value); } catch { /* */ } loadTrusted(); });
   root.querySelector('#clear-activity')?.addEventListener('click', async () => { try { await backend().ClearActivity(); } catch { /* */ } state.activity = []; render(); });
 }
 

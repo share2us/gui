@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/lanshare"
 	"github.com/share2us/gui/internal/core"
-	"github.com/share2us/cli-core/lanid"
 )
 
 // Listen is what a sender needs to reach this receiver, surfaced to the UI.
@@ -181,6 +181,9 @@ type Request struct {
 	Fingerprint string `json:"fingerprint"`
 	SenderName  string `json:"senderName"`
 	Code        string `json:"code"`
+	// Trusted is set by the app when the sender is a trusted device in "ask"
+	// mode, so the prompt can drop the verify code and the trust checkbox.
+	Trusted bool `json:"trusted"`
 }
 
 // Serve runs a persistent, discoverable receiver: it advertises under name,
@@ -193,7 +196,7 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 	go func() {
 		var adv io.Closer
 		_, err := lanshare.Receive(ctx, lanshare.ReceiveOptions{
-			DestDir:    destDir,
+			DestDir: destDir,
 			// Bind all interfaces. A single detected IP (via the 8.8.8.8 route
 			// trick) is wrong behind a VPN/virtual default route, leaving the LAN
 			// unreachable. mDNS publishes every interface address, so binding all
