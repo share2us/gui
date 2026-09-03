@@ -2,7 +2,13 @@
 
 package update
 
-import "testing"
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func testRelease() ghRelease {
 	return ghRelease{
@@ -47,6 +53,55 @@ func TestPickAssetPerOS(t *testing.T) {
 	for _, c := range cases {
 		if name, _ := pickAsset(rel, c.goos, c.goarch); name != c.want {
 			t.Errorf("%s/%s asset = %q, want %q", c.goos, c.goarch, name, c.want)
+		}
+	}
+}
+
+func TestNewestReleasePrefersHighestNonDraftIncludingPrereleases(t *testing.T) {
+	releases := []ghRelease{
+		{TagName: "v20260901000000"},                                // stable
+		{TagName: "v20260903000000", Prerelease: true},              // newer beta
+		{TagName: "v20260904000000", Prerelease: true, Draft: true}, // draft: ignored
+		{TagName: "v1", Prerelease: true},                           // malformed: ignored
+	}
+	rel, ok := newestRelease(releases)
+	if !ok || rel.TagName != "v20260903000000" || !rel.Prerelease {
+		t.Fatalf("newest = %+v ok=%v", rel, ok)
+	}
+	// A stable newer than the last beta wins on the beta channel too.
+	rel, _ = newestRelease([]ghRelease{{TagName: "v20260905000000"}, {TagName: "v20260903000000", Prerelease: true}})
+	if rel.TagName != "v20260905000000" || rel.Prerelease {
+		t.Fatalf("newest stable should win: %+v", rel)
+	}
+	if _, ok := newestRelease([]ghRelease{{TagName: "v2", Draft: true}}); ok {
+		t.Fatal("no eligible release should report ok=false")
+	}
+}
+
+func TestCheckBetaAtAgainstAReleaseList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `[
+		  {"tag_name":"v20260901000000","html_url":"https://x/stable","assets":[{"name":"share2us-gui_linux_amd64.tar.gz","browser_download_url":"https://x/stable.tgz"}]},
+		  {"tag_name":"v20260903000000","prerelease":true,"html_url":"https://x/beta","assets":[{"name":"share2us-gui_linux_amd64.tar.gz","browser_download_url":"https://x/beta.tgz"},{"name":"share2us-gui_linux_amd64.tar.gz.sha256","browser_download_url":"https://x/beta.tgz.sha256"}]}
+		]`)
+	}))
+	defer srv.Close()
+	info, err := checkBetaAt(context.Background(), srv.Client(), srv.URL, "20260902000000", "linux", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Available || info.Latest != "20260903000000" || info.Channel != ChannelBeta || !info.Prerelease {
+		t.Fatalf("info = %+v", info)
+	}
+	if info.AssetURL != "https://x/beta.tgz" || info.SHA256URL != "https://x/beta.tgz.sha256" {
+		t.Fatalf("assets = %s %s", info.AssetURL, info.SHA256URL)
+	}
+}
+
+func TestNormalizeChannel(t *testing.T) {
+	for in, want := range map[string]string{"": ChannelStable, "stable": ChannelStable, "Beta": ChannelBeta, "nightly": ChannelStable} {
+		if got := NormalizeChannel(in); got != want {
+			t.Errorf("NormalizeChannel(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

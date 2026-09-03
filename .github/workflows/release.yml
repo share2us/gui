@@ -8,10 +8,11 @@ name: release
 # any change shipped a build to every installed GUI -- the in-app updater reads
 # /releases/latest. Cutting a release is now an explicit action.
 #
-#   channel=beta   -> pre-release, --latest=false. internal/update/update.go
-#                     asks GitHub for releases/latest, so a beta is invisible to
-#                     installed clients by construction. This is the staging
-#                     channel.
+#   channel=beta   -> pre-release, --latest=false. Stable installs ask GitHub
+#                     for releases/latest, so a beta is invisible to them by
+#                     construction; installs that opted in (Settings -> "Get beta
+#                     builds", shared with `s2u update --channel beta`) list all
+#                     releases and pick the newest. This is the staging channel.
 #   channel=stable -> --latest. Users get it on their next update check.
 # A merge to `main` publishes a STABLE release. Safe now in a way it was not
 # before: `main` is reached only through a reviewed PR from a release branch,

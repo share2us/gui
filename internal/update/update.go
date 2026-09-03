@@ -20,7 +20,12 @@ import (
 	"time"
 )
 
-const defaultReleasesURL = "https://api.github.com/repos/share2us/gui/releases/latest"
+const (
+	// stable: GitHub's "latest" release, which is never a pre-release.
+	defaultReleasesURL = "https://api.github.com/repos/share2us/gui/releases/latest"
+	// beta: the full list (pre-releases included), newest picked by tag.
+	defaultReleaseListURL = "https://api.github.com/repos/share2us/gui/releases?per_page=30"
+)
 
 type ghAsset struct {
 	Name string `json:"name"`
@@ -28,37 +33,105 @@ type ghAsset struct {
 }
 
 type ghRelease struct {
-	TagName string    `json:"tag_name"`
-	HTMLURL string    `json:"html_url"`
-	Assets  []ghAsset `json:"assets"`
+	TagName    string    `json:"tag_name"`
+	HTMLURL    string    `json:"html_url"`
+	Draft      bool      `json:"draft"`
+	Prerelease bool      `json:"prerelease"`
+	Assets     []ghAsset `json:"assets"`
 }
 
-// Check queries the latest release for the running OS/arch.
-func Check(ctx context.Context, current string) (Info, error) {
+// Check queries GitHub for the newest release on the channel for the running
+// OS/arch. channel is "stable" (or "") or "beta"; see NormalizeChannel.
+func Check(ctx context.Context, current, channel string) (Info, error) {
 	client := &http.Client{Timeout: 12 * time.Second}
+	if NormalizeChannel(channel) == ChannelBeta {
+		return checkBetaAt(ctx, client, defaultReleaseListURL, current, runtime.GOOS, runtime.GOARCH)
+	}
 	return checkAt(ctx, client, defaultReleasesURL, current, runtime.GOOS, runtime.GOARCH)
 }
 
 func checkAt(ctx context.Context, client *http.Client, url, current, goos, goarch string) (Info, error) {
+	var rel ghRelease
+	if err := getJSON(ctx, client, url, &rel); err != nil {
+		return Info{}, err
+	}
+	info := infoFrom(rel, current, goos, goarch)
+	info.Channel = ChannelStable
+	return info, nil
+}
+
+// checkBetaAt lists releases and offers the newest non-draft one, pre-release
+// or not. A stable newer than the last beta wins, so a beta install is never
+// stranded on an old build.
+func checkBetaAt(ctx context.Context, client *http.Client, url, current, goos, goarch string) (Info, error) {
+	var releases []ghRelease
+	if err := getJSON(ctx, client, url, &releases); err != nil {
+		return Info{}, err
+	}
+	rel, ok := newestRelease(releases)
+	if !ok {
+		return Info{}, fmt.Errorf("update check: no published release")
+	}
+	info := infoFrom(rel, current, goos, goarch)
+	info.Channel = ChannelBeta
+	info.Prerelease = rel.Prerelease
+	return info, nil
+}
+
+// newestRelease picks the highest build version among non-draft releases. Tags
+// are "v<UTC timestamp>", fixed width, so after a length check plain string order
+// is chronological; a malformed tag never wins.
+func newestRelease(releases []ghRelease) (ghRelease, bool) {
+	var best ghRelease
+	found := false
+	for _, r := range releases {
+		v := buildVersion(r.TagName)
+		if r.Draft || v == "" {
+			continue
+		}
+		if !found || versionLess(buildVersion(best.TagName), v) {
+			best, found = r, true
+		}
+	}
+	return best, found
+}
+
+func buildVersion(tag string) string {
+	v := strings.TrimPrefix(strings.TrimSpace(tag), "v")
+	if v == "" {
+		return ""
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return v
+}
+
+func versionLess(a, b string) bool {
+	if len(a) != len(b) {
+		return len(a) < len(b)
+	}
+	return a < b
+}
+
+func getJSON(ctx context.Context, client *http.Client, url string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return Info{}, err
+		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "share2us-gui")
 	resp, err := client.Do(req)
 	if err != nil {
-		return Info{}, err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Info{}, fmt.Errorf("update check: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("update check: HTTP %d", resp.StatusCode)
 	}
-	var rel ghRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil {
-		return Info{}, err
-	}
-	return infoFrom(rel, current, goos, goarch), nil
+	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
 }
 
 func infoFrom(rel ghRelease, current, goos, goarch string) Info {
