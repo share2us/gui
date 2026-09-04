@@ -181,6 +181,9 @@ type Request struct {
 	Fingerprint string `json:"fingerprint"`
 	SenderName  string `json:"senderName"`
 	Code        string `json:"code"`
+	// SafetyNumber is the long (5x4 digits) comparison number for the TRUST
+	// step; the 6-digit Code is only for per-transfer prompts.
+	SafetyNumber string `json:"safetyNumber"`
 	// Trusted is set by the app when the sender is a trusted device in "ask"
 	// mode, so the prompt can drop the verify code and the trust checkbox.
 	Trusted bool `json:"trusted"`
@@ -223,7 +226,7 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 				fp := lanshare.IdentityFingerprint(r.SenderKey)
 				return approve(Request{
 					From: firstNonEmpty(r.PeerIP, "a nearby device"), Name: r.Name, Size: r.Size, IsDir: r.IsDir,
-					Fingerprint: fp, SenderName: r.SenderName, Code: lanshare.VerifyCode(fp),
+					Fingerprint: fp, SenderName: r.SenderName, Code: lanshare.VerifyCode(fp), SafetyNumber: lanshare.SafetyNumber(fp),
 				})
 			},
 			OnReceived: func(res lanshare.ReceiveResult) {
@@ -298,7 +301,7 @@ func StartBroadcast(parent context.Context, path, access string, approve func(Re
 				fp := lanshare.IdentityFingerprint(r.SenderKey)
 				return approve(Request{
 					From: firstNonEmpty(r.PeerIP, "a nearby device"), Name: r.Name, Size: r.Size,
-					Fingerprint: fp, SenderName: r.SenderName, Code: lanshare.VerifyCode(fp),
+					Fingerprint: fp, SenderName: r.SenderName, Code: lanshare.VerifyCode(fp), SafetyNumber: lanshare.SafetyNumber(fp),
 				})
 			},
 			OnListen: func(li lanshare.ListenInfo) {

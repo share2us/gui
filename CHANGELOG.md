@@ -16,6 +16,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Security
+- Trusting a device now shows its **safety number** (five groups of four
+  digits derived from the device key) in the confirmation dialog, to compare
+  with the other device's own screen before entering the code. The six-digit
+  code stays for per-transfer prompts but is short enough for a determined
+  attacker to forge a matching device; the safety number is not. Your own
+  safety number appears next to the verify code when Discoverable is on.
+
 ## [20260903170224] - 2026-09-03
 
 ### Security

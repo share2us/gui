@@ -17,6 +17,7 @@ import (
 
 	"github.com/gen2brain/beeep"
 	"github.com/share2us/cli-core/lanid"
+	"github.com/share2us/cli-core/lanshare"
 	"github.com/share2us/gui/internal/autostart"
 	"github.com/share2us/gui/internal/clip"
 	"github.com/share2us/gui/internal/core"
@@ -488,7 +489,7 @@ func (a *App) SetDiscoverable(on bool) error {
 	}
 	a.discRecv = lan.Serve(a.ctx, name, receiver.DownloadsDir(),
 		func(l lan.Listen) {
-			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"address": l.Address, "name": name, "code": l.Code})
+			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"address": l.Address, "name": name, "code": l.Code, "safety": lanid.SafetyNumber()})
 		},
 		a.approveRequest,
 		func(res lan.Result) {
@@ -588,7 +589,7 @@ func (a *App) promptApproval(r lan.Request, action string) bool {
 	wailsRuntime.EventsEmit(a.ctx, "lan-request", map[string]any{
 		"id": id, "from": r.From, "name": r.Name, "size": r.Size,
 		"fingerprint": r.Fingerprint, "senderName": r.SenderName, "code": r.Code, "action": action,
-		"trusted": r.Trusted,
+		"trusted": r.Trusted, "safetyNumber": r.SafetyNumber,
 	})
 
 	ok := false
@@ -606,11 +607,12 @@ func (a *App) promptApproval(r lan.Request, action string) bool {
 
 // TrustChallengeInfo is what the UI needs to collect the second factor.
 type TrustChallengeInfo struct {
-	ChallengeID string `json:"challengeId"`
-	Factor      string `json:"factor"` // "email" | "totp"
-	SentTo      string `json:"sentTo"`
-	VerifyCode  string `json:"verifyCode"`
-	ExpiresIn   int    `json:"expiresIn"`
+	ChallengeID  string `json:"challengeId"`
+	Factor       string `json:"factor"` // "email" | "totp"
+	SentTo       string `json:"sentTo"`
+	VerifyCode   string `json:"verifyCode"`
+	SafetyNumber string `json:"safetyNumber"` // compare with the other device before trusting
+	ExpiresIn    int    `json:"expiresIn"`
 }
 
 // TrustDevice opens a trust challenge for a device (ADR-034). Nothing is trusted
@@ -629,7 +631,7 @@ func (a *App) TrustDevice(fingerprint, name, mode string) (TrustChallengeInfo, e
 	if err != nil {
 		return TrustChallengeInfo{}, err
 	}
-	return TrustChallengeInfo{ChallengeID: ch.ChallengeID, Factor: ch.Factor, SentTo: ch.SentTo, VerifyCode: ch.VerifyCode, ExpiresIn: ch.ExpiresIn}, nil
+	return TrustChallengeInfo{ChallengeID: ch.ChallengeID, Factor: ch.Factor, SentTo: ch.SentTo, VerifyCode: ch.VerifyCode, SafetyNumber: lanshare.SafetyNumber(fingerprint), ExpiresIn: ch.ExpiresIn}, nil
 }
 
 // VerifyTrust submits the code for a challenge; on success the device is
