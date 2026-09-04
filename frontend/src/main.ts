@@ -30,7 +30,7 @@ type LanPeer = {
 };
 type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string; trusted?: boolean };
 type TrustedDevice = { fingerprint: string; name: string; mode: 'ask' | 'auto' };
-type TrustChallenge = { challengeId: string; factor: string; sentTo: string; verifyCode: string; expiresIn: number };
+type TrustChallenge = { challengeId: string; factor: string; sentTo: string; verifyCode: string; safetyNumber: string; expiresIn: number };
 type TrustPrompt = TrustChallenge & { fingerprint: string; name: string; mode: string; error: string; busy: boolean };
 type ClipSuggestion = { kind: 'image' | 'text' | 'none'; preview: string; ext: string };
 type Activity = { kind: string; peer: string; name: string; size: number; ts: number; link?: string };
@@ -91,6 +91,7 @@ const state = {
   trusted: [] as TrustedDevice[],
   bc: null as BroadcastState | null, // live broadcast
   discCode: '' as string,
+  discSafety: '' as string, // this device's safety number (compare before trusting it from elsewhere)
   clip: null as ClipSuggestion | null,
   theme: 'dark' as 'dark' | 'light',
   update: null as UpdateInfo | null,
@@ -175,7 +176,7 @@ function header(): string {
 
 function discBanner(): string {
   if (!state.status?.discoverable) return '';
-  const code = state.discCode ? `<b>Verify code ${escapeHtml(state.discCode)}</b>` : 'starting…';
+  const code = state.discCode ? `<b>Verify code ${escapeHtml(state.discCode)}</b>${state.discSafety ? ` · <span class="hint" title="Compare this before another device trusts this one">safety number <b>${escapeHtml(state.discSafety)}</b></span>` : ''}` : 'starting…';
   return `<div class="disc-bar">📡 Discoverable — nearby devices can send you files. ${code}</div>`;
 }
 
@@ -419,11 +420,14 @@ function updateBanner(): string {
 function trustCodeOverlay(p: TrustPrompt): string {
   const how = p.factor === 'totp'
     ? 'Enter the 6-digit code from your authenticator app.'
-    : `We emailed a 6-digit code to <b>${escapeHtml(p.sentTo)}</b>. The email also shows this device's code <b>${escapeHtml(p.verifyCode)}</b> — make sure it matches.`;
+    : `We emailed a 6-digit code to <b>${escapeHtml(p.sentTo)}</b>.`;
+  const safety = p.safetyNumber
+    ? `<div class="hint">Safety number of this device: <b>${escapeHtml(p.safetyNumber)}</b>. Compare it with its own screen (Settings, or <code>s2u lan id</code>). If it differs, choose Not now — someone may be impersonating it.</div>`
+    : '';
   const what = p.mode === 'auto' ? 'its files will be saved automatically' : 'it will still ask before each transfer, without a code';
   return `<div class="overlay"><div class="overlay-card">
     <div class="overlay-title">Confirm trusting ${escapeHtml(p.name || p.fingerprint.slice(0, 10))}</div>
-    <div class="overlay-body"><div class="hint">${how}</div><div class="hint">Once confirmed, ${what}.</div>
+    <div class="overlay-body">${safety}<div class="hint">${how}</div><div class="hint">Once confirmed, ${what}.</div>
       <input id="trust-code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123 456" ${p.busy ? 'disabled' : ''} />
       <div class="hint trust-error" style="min-height:1.2em">${escapeHtml(p.error)}</div>
     </div>
@@ -793,7 +797,7 @@ function setupListeners() {
     render();
   });
   rt?.EventsOn?.('lan-recv-done', () => { refreshActivity().then(render); });
-  rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); render(); } });
+  rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); state.discSafety = String(d?.safety || ''); render(); } });
   rt?.EventsOn?.('lan-bc-conn', async () => { try { state.bc = await backend().BroadcastStats(); if (state.view === 'broadcast' || (state.view === 'home')) render(); } catch { /* */ } });
   window.addEventListener('focus', () => checkClipboard());
 }
