@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260904062511] - 2026-09-04
+
 ### Security
 - Trusting a device now shows its **safety number** (five groups of four
   digits derived from the device key) in the confirmation dialog, to compare
