@@ -20,6 +20,7 @@ import (
 	"github.com/share2us/gui/internal/update"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/daemonctl"
 	"github.com/share2us/cli-core/lanid"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -202,7 +203,12 @@ func runTray() {
 	dir := receiver.DownloadsDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	// Receive in the background when signed in with a device key; toast on arrival.
-	if c, err := core.Load(); err == nil && c.HasDeviceKey() {
+	// If the s2u daemon (ADR-035) is already running and owns the receiver, defer
+	// to it: the tray still shows its icon and menu, but starting a second inbox
+	// poll here would double-download. daemonctl.OwnsReceiver returns false fast
+	// when no daemon is installed, so this is a no-op for most users.
+	c, err := core.Load()
+	if err == nil && c.HasDeviceKey() && !daemonctl.OwnsReceiver() {
 		go receiver.Loop(ctx, c, dir, receiver.DefaultInterval, func(e receiver.Event) {
 			if e.Err == nil {
 				notifyReceived(e.Received)
