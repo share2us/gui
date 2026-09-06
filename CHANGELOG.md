@@ -16,6 +16,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Changed
+- When the Share2Us background service (`s2u daemon`) is running, the desktop
+  app now defers background receiving to it instead of starting its own, so the
+  two never both download the same incoming file. No effect when the daemon
+  isn't installed.
+
 ## [20260904062511] - 2026-09-04
 
 ### Security
