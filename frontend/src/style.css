@@ -878,6 +878,38 @@ select:focus {
   cursor: default;
 }
 
+/* Recipients for a restricted link. Sits above the options card so the address
+   list reads as part of choosing "only these people", not as an extra setting. */
+.rcpt-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.rcpt-hint {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+/* The version line and the project links share one row. Both are always present,
+   so nothing here can reflow. */
+.build-links {
+  display: inline-flex;
+  gap: var(--s3);
+  margin-left: auto;
+}
+.build-links .strip-link {
+  font-size: 11.5px;
+}
+
+/* A filed arrival is listed but not waiting: dimmer mark, same geometry. */
+.inc-row {
+  cursor: pointer;
+}
+.inc-row:hover {
+  background: var(--bg-2);
+}
+
 .or-line {
   display: flex;
   align-items: center;
@@ -1529,6 +1561,9 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
    height and always rendered (even while the value is still loading) so it can
    never appear late and push the frame around. */
 .build-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
   flex: 0 0 auto;
   padding: 5px 18px 7px;
   border-top: 1px solid var(--border);

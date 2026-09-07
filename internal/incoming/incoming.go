@@ -34,9 +34,19 @@ type Item struct {
 	From string    `json:"from"` // sender device name, "" when anonymous
 	Size int64     `json:"size"`
 	At   time.Time `json:"at"`
-	// File is the staged copy's absolute path. Never shown: the user cares about
-	// Name, and this location is an implementation detail they did not choose.
+	// File is the copy's absolute path. Never shown: the user cares about Name,
+	// and this location is an implementation detail they did not choose.
 	File string `json:"file"`
+	// Filed marks an arrival that has ALREADY been written to the folder the user
+	// chose, and is listed only so a one-off can still be sent somewhere else.
+	//
+	// The distinction matters for retention: an unfiled arrival lives in staging
+	// and is deleted when it expires, because nobody claimed it. A filed one is
+	// the user's file, sitting where they asked for it — it drops off this list
+	// when it expires and is NEVER deleted.
+	Filed bool `json:"filed,omitempty"`
+	// SavedTo is the folder a filed arrival went to, for the UI to name it.
+	SavedTo string `json:"savedTo,omitempty"`
 }
 
 // store is the on-disk index plus the folder the user chose to save into.
@@ -114,6 +124,17 @@ func StagePath() (string, error) { return Dir() }
 
 // Add records a file that has landed in the staging directory.
 func Add(name, from, file string, size int64) (Item, error) {
+	return record(name, from, file, size, false, "")
+}
+
+// AddFiled records an arrival that has already been written to the folder the
+// user chose. It is listed like any other so a one-off can still be redirected,
+// but it is the user's file now and retention will never delete it.
+func AddFiled(name, from, file string, size int64, folder string) (Item, error) {
+	return record(name, from, file, size, true, folder)
+}
+
+func record(name, from, file string, size int64, filed bool, folder string) (Item, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	s, err := load()
@@ -121,15 +142,42 @@ func Add(name, from, file string, size int64) (Item, error) {
 		return Item{}, err
 	}
 	it := Item{
-		ID:   strconv.FormatInt(time.Now().UnixNano(), 36),
-		Name: name,
-		From: from,
-		Size: size,
-		At:   time.Now(),
-		File: file,
+		ID:      strconv.FormatInt(time.Now().UnixNano(), 36),
+		Name:    name,
+		From:    from,
+		Size:    size,
+		At:      time.Now(),
+		File:    file,
+		Filed:   filed,
+		SavedTo: folder,
 	}
 	s.Items = append(s.Items, it)
 	return it, save(s)
+}
+
+// Stage moves a just-received file to a name of its own inside the staging
+// directory and records it.
+//
+// It exists because the receiver writes every arrival under the sender's own
+// file name into one fixed directory, and refuses to start a transfer whose name
+// is already there. So a second copy of "report.pdf", while the first still
+// waited to be filed, failed the whole transfer and told the sender to re-run
+// with a flag the desktop app does not have. Giving each arrival its own name
+// the moment it lands frees the sender's name for the next one.
+func Stage(name, from, srcPath string, size int64) (Item, error) {
+	dir, err := Dir()
+	if err != nil {
+		return Item{}, err
+	}
+	id := strconv.FormatInt(time.Now().UnixNano(), 36)
+	dst := filepath.Join(dir, id+"-"+filepath.Base(srcPath))
+	if err := os.Rename(srcPath, dst); err != nil {
+		// Could not rename: keep the file where it is rather than lose it. The
+		// next same-named arrival will fail, which is the old behaviour, not a
+		// new one.
+		dst = srcPath
+	}
+	return Add(name, from, dst, size)
 }
 
 // List returns what is waiting, newest first.
@@ -247,17 +295,26 @@ func move(src, dst string) error {
 	return os.Remove(src)
 }
 
-// Sweep deletes arrivals nobody filed within maxAge and reports how many went.
-// A file nobody saves must not accumulate forever; the caller is expected to
-// tell the user the count rather than let files disappear silently.
+// Sweep expires old arrivals and reports how many staged files were deleted.
+//
+// Only UNFILED arrivals are deleted: those are staged copies nobody claimed, and
+// they must not accumulate forever. A filed arrival is the user's own file in the
+// folder they chose — it merely stops being listed, and is never touched on disk.
+// The returned count is only the deletions, because that is the number worth
+// telling someone about.
 func Sweep(maxAge time.Duration) int {
 	cutoff := time.Now().Add(-maxAge)
 	n := 0
 	for _, it := range List() {
-		if it.At.Before(cutoff) {
-			if Discard(it.ID) == nil {
-				n++
-			}
+		if !it.At.Before(cutoff) {
+			continue
+		}
+		if it.Filed {
+			_ = forget(it.ID) // drop from the list, leave the file alone
+			continue
+		}
+		if Discard(it.ID) == nil {
+			n++
 		}
 	}
 	return n

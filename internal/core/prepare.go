@@ -238,9 +238,12 @@ func zipDirectory(root string) (string, error) {
 	return tmpPath, nil
 }
 
-// uniquePath returns p if free, else "p (1)", "p (2)", ... so a receive never
+// UniquePath returns p if free, else "p (1)", "p (2)", ... so a receive never
 // overwrites an existing file in Downloads.
-func uniquePath(p string) string {
+// UniquePath returns p, or the first "name (n).ext" variant that does not exist.
+// Exported because the receive side needs exactly this: filing an arrival into a
+// folder that already holds that name must not destroy what is there.
+func UniquePath(p string) string {
 	if _, err := os.Stat(p); os.IsNotExist(err) {
 		return p
 	}
