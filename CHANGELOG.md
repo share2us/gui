@@ -17,6 +17,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      section empty cuts NO release; write a line here and the merge ships. -->
 
 ### Fixed
+- **The window no longer jumps a moment after it opens.** Nearby devices, incoming
+  files and recent activity all arrive a beat after the window appears, and the
+  layout used to settle around them. The space is now held from the first frame.
+- **Settings stops resizing while you are in it.** "Clear activity log", "Ask each
+  time" and the sign-out row appeared only once they had something to act on, so
+  the panel changed height underneath you. They are always there, and dimmed when
+  they do not apply.
+
+### Fixed
 - **The keyboard can reach everything again.** Choosing where a file goes was
   drawn as plain boxes with no keyboard behaviour at all, so that choice could
   only be made with a mouse. The destination cards and the broadcast access modes

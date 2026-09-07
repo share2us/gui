@@ -128,7 +128,8 @@ const state = {
   pendingRemember: '' as string, // folder just used, offered as the default once
   shaiOpen: false as boolean,
   updateOpen: false as boolean,
-  updateChecking: false as boolean, // the update panel; the dot is the notification // the coming-soon panel behind the header launcher
+  updateChecking: false as boolean,
+  feedLoading: true as boolean, // first paint only: hold the feed's size until its data lands // the update panel; the dot is the notification // the coming-soon panel behind the header launcher
   // The device chosen to send to. Picking one SELECTS it rather than sending
   // immediately, so the button can name it truthfully and there is a moment to
   // notice you picked the wrong machine before the file leaves.
@@ -186,6 +187,12 @@ async function boot() {
     if (!state.storeManaged) checkForUpdate();
     checkClipboard();
     findNearby(); // populate nearby devices/broadcasts on open
+    // The feed's three sections all arrive asynchronously; release the reserved
+    // space once the first round has landed, whether or not it found anything.
+    void Promise.allSettled([refreshActivity(), refreshIncoming()]).then(() => {
+      state.feedLoading = false;
+      if (state.view === 'home') render();
+    });
     startScanTimer();
   } catch (e) {
     root.innerHTML = `<div class="error-box">Could not start: ${escapeHtml(String(e))}</div>`;
@@ -305,7 +312,7 @@ function renderHome(): void {
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
-      <div class="feed-scroll">${sectionNearby()}${sectionIncoming()}${sectionRecent()}</div>
+      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
       ${settingsBlock()}
     </div>
     ${state.requests.length ? requestOverlay(state.requests[0]) : ''}
@@ -378,6 +385,13 @@ function sectionIncoming(): string {
     .join('');
   const anyWaiting = state.incoming.some((f) => !f.filed);
   return `<div class="sec-head"><b>Incoming</b><span class="meta">${anyWaiting ? 'waiting to be saved' : 'recently received'}</span></div>${rows}${remember}`;
+}
+
+// Placeholder rows at the height of the real ones, so the opening frame is the
+// size the loaded frame will be.
+function feedSkeleton(): string {
+  const row = `<div class="item sk"><div class="ico sk-b"></div><div class="line"><span class="sk-b sk-line"></span></div></div>`;
+  return `<div class="sec-head"><b>Nearby</b></div>${row}${row}`;
 }
 
 // Capped at five. The full history lives in the portal rather than being rebuilt
@@ -763,15 +777,20 @@ function settingsBlock(): string {
       <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${s.autostartEnabled ? 'checked' : ''} ${s.canReceive ? '' : 'disabled'} /><span class="setting-label">Start Share2Us at login<span class="setting-help">So it is already running to receive files. Being found by other devices also needs “Discoverable on local network” above.</span></span></label>
       <label class="setting-row${state.storeManaged ? ' is-disabled' : ''}"><input type="checkbox" id="set-beta" ${state.updateChannel === 'beta' ? 'checked' : ''} ${state.storeManaged ? 'disabled' : ''} /><span class="setting-label">Get beta builds<span class="setting-help">${state.storeManaged ? 'The Microsoft Store manages updates for this install.' : 'Pre-release builds before they reach everyone. Also switches the s2u command line on this machine.'}</span></span></label>
       ${trustedBlock()}
-      ${state.activity.length ? `<button class="btn-mini" id="clear-activity">Clear activity log</button>` : ''}
+      <button class="btn-mini" id="clear-activity" ${state.activity.length ? '' : 'disabled'}
+              title="${state.activity.length ? 'Remove the recent-activity list from this device' : 'Nothing to clear yet'}">Clear activity log</button>
       <div class="setting-row" style="justify-content:space-between">
         <span class="setting-label">Received files${state.incomingFolder ? '' : ' · you are asked each time'}<span class="setting-help">${state.incomingFolder ? escapeHtml(state.incomingFolder) : 'Nothing is saved anywhere until you choose.'}</span></span>
         <span style="display:flex;gap:6px;flex:none">
           <button class="btn-hdr" id="change-folder">Change</button>
-          ${state.incomingFolder ? `<button class="btn-hdr" id="clear-folder">Ask each time</button>` : ''}
+          <button class="btn-hdr" id="clear-folder" ${state.incomingFolder ? '' : 'disabled'}
+                  title="${state.incomingFolder ? 'Go back to choosing a folder for each file' : 'You are already asked each time'}">Ask each time</button>
         </span>
       </div>
-      ${s.loggedIn ? `<div class="setting-row" style="justify-content:space-between"><span class="setting-label">Signed in as ${escapeHtml(s.email)}</span><button class="btn-hdr" id="logout-btn">Log out</button></div>` : ''}
+      <div class="setting-row" style="justify-content:space-between">
+        <span class="setting-label">${s.loggedIn ? `Signed in as ${escapeHtml(s.email)}` : 'Not signed in'}</span>
+        <button class="btn-hdr" id="logout-btn" ${s.loggedIn ? '' : 'disabled'}>Log out</button>
+      </div>
     </div>
   </details>`;
 }
