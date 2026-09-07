@@ -16,7 +16,30 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260907163356] - 2026-09-07
+
+### Fixed
+- **Being discoverable is remembered.** It was only held in memory, so every
+  launch started with the device invisible however you had left it, and nearby
+  sharing simply appeared not to work. Off is still the default.
+- **"Receive files sent to this device" at setup now means it.** That box only
+  made the app start at login, and an app that is not discoverable receives
+  nothing. It now turns on receiving as well.
+- The address box under a device no longer says **"or a code"**. It takes an
+  address or an `s2u://` link; the six-digit code is for checking that a device
+  is really who it says it is, and was never something you could type in there.
+  It also has a **Use** button and accepts Enter, so there is a visible way to
+  confirm a typed address.
+- The **update** button and the **rescan** button are no longer near-identical
+  circular arrows. Update carries an install arrow, and both say what they do.
+- The app name and logo no longer appear twice — the window title bar already
+  carries them, so the account e-mail takes that space and is no longer clipped.
+- **Settings** appeared twice. There is one entry point now, in the status strip.
+
 ### Changed
+- "Auto-receive files at login" is now **"Start Share2Us at login"**, which is
+  what it does; being found by other devices is the Discoverable setting above
+  it.
 - When the Share2Us background service (`s2u daemon`) is running, the desktop
   app now defers background receiving to it instead of starting its own, so the
   two never both download the same incoming file. No effect when the daemon
