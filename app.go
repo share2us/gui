@@ -94,6 +94,18 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 	go cleanupOldTemps() // remove staged paste/update temp dirs left by prior runs
+	go func() {
+		// Arrivals nobody filed do not live forever. The count is announced
+		// rather than the files vanishing quietly, because a file someone sent
+		// you disappearing without a word is worse than the clutter it saves.
+		if n := incoming.Sweep(7 * 24 * time.Hour); n > 0 {
+			a.notifyArrival(
+				fmt.Sprintf("%d unsaved file%s removed", n, map[bool]string{true: "", false: "s"}[n == 1]),
+				"They had been waiting over a week. Save them sooner to keep them.",
+			)
+			wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
+		}
+	}()
 }
 
 // cleanupOldTemps best-effort removes leftover Share2Us temp dirs (staged pastes

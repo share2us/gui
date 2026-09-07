@@ -1669,3 +1669,27 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
   cursor: not-allowed;
 }
 .shai-mic { margin-left: auto; opacity: .5; }
+
+/* Phase 7 — focus and motion.
+   Every interactive element gets a visible focus ring: the app is keyboard and
+   screen-reader reachable, and an invisible focus is the same as none. */
+:where(button, a, input, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* Motion uses the shared tokens so the app moves at the portal's pace, and stops
+   entirely for anyone who has asked it to. Reduced motion is a preference about
+   vestibular comfort, not decoration, so it is honoured everywhere rather than
+   on the animations we happen to remember. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
