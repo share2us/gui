@@ -278,8 +278,21 @@ body {
   color: var(--muted);
   line-height: 1.5;
 }
-/* Wails toggles this custom property on the drop target while dragging. */
-body[style*="--wails-drop-target"] .canvas {
+/* Wails only accepts a file drop when the element under the cursor computes
+   --wails-drop-target: drop (see its draganddrop.js checkStyleDropTarget; the
+   property name and value are the CSSDropProperty/CSSDropValue defaults). It
+   does NOT set this itself — the app must, and nothing here did, so on Windows
+   there was no drop target and WebView2 silently accepted nothing. The property
+   inherits, so declaring it on body makes the whole window droppable. */
+body {
+  --wails-drop-target: drop;
+}
+
+/* While a file is over the window, Wails adds this CLASS to the hovered element
+   and every ancestor that is a drop target — so body carries it wherever the
+   cursor is. The previous selector keyed off body's inline STYLE, which Wails
+   never writes, so the highlight never appeared either. */
+body.wails-drop-target-active .canvas {
   border-color: var(--accent);
   background: var(--surface-2);
 }
