@@ -944,6 +944,20 @@ select:focus {
   }
 }
 
+/* One height for the whole sign-in flow: "starting", "approve this device" and
+   the error all sit in the same box, so the window does not move under someone
+   reading a code off it. */
+.login-slot {
+  /* Sized for the tallest state it reaches — the "approve this device" line with
+     a code and a button — so the box does not grow while someone is reading a
+     code off it. Appearing at all is a direct response to pressing Login. */
+  min-height: 80px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
 .or-line {
   display: flex;
   align-items: center;
