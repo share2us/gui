@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+## [20260907195114] - 2026-09-08
+
 ### Fixed
 - **The window no longer jumps a moment after it opens.** Nearby devices, incoming
   files and recent activity all arrive a beat after the window appears, and the
@@ -24,6 +26,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   time" and the sign-out row appeared only once they had something to act on, so
   the panel changed height underneath you. They are always there, and dimmed when
   they do not apply.
+
+## [20260907194514] - 2026-09-08
 
 ### Fixed
 - **The keyboard can reach everything again.** Choosing where a file goes was
