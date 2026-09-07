@@ -17,6 +17,22 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Fixed
+- **No more console window flashing on Windows.** Looking for nearby devices ran
+  the `tailscale` command each time, and a desktop app starting a console program
+  opens a console. It now runs hidden, and is not run at all when Tailscale is
+  not installed.
+- **The routine check no longer probes every address on the network.** A full
+  sweep happens when you press refresh, and unattended at most once every ten
+  minutes; the check in between re-probes only devices already seen. A desktop
+  app connecting to every address once a minute is the signature of a port
+  scanner, and antivirus software is right to treat it as one.
+- **The arrow beside a nearby device does something.** From the home screen no
+  files were chosen yet, so it sent an empty list — nothing happened, and an
+  empty send counted as a success, so nothing was reported either. It now asks
+  which files to send and opens the send flow with that device chosen.
+- **This device's own address is shown** in the status strip beside its verify
+  code, with every address of the machine in the tooltip, so matching your device
+  in someone else's list no longer means going to look it up in Windows.
 - **Nearby devices are found even when the network blocks multicast.** The app
   looked for devices only by name announcement (mDNS), which plenty of ordinary
   networks drop — access points with client isolation, a firewall blocking

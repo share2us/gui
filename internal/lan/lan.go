@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -171,16 +172,60 @@ type Peer struct {
 //
 // Running both means a blocked multicast path degrades the label rather than the
 // feature: the device still appears, addressed by IP.
-func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
+// Deep says whether the direct probe may sweep the whole local subnet, or must
+// stay to the handful of addresses in Known.
+//
+// A sweep is ~254 TLS connects. Done once because a person pressed refresh, that
+// is unremarkable. Done every 60 seconds by a background timer, it is the exact
+// signature of a port scanner, and endpoint security is right to treat it as
+// one. So the sweep is a deliberate act, and the routine tick re-probes only
+// addresses already known to be Share2Us devices.
+type BrowseOptions struct {
+	Timeout time.Duration
+	Deep    bool
+	// Known are hosts previously seen as devices, re-probed on a shallow pass so
+	// one stays listed while multicast is unavailable.
+	Known []string
+}
+
+func Browse(ctx context.Context, opts BrowseOptions) ([]Peer, error) {
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 1500 * time.Millisecond
+	}
 	type scanResult struct {
 		peers []lanshare.ScannedPeer
 		err   error
 	}
 	scanCh := make(chan scanResult, 1)
 	go func() {
-		// The tailnet is enumerated rather than swept, so this stays cheap even
-		// though it reaches devices no local broadcast ever could.
-		peers, err := lanshare.Scan(ctx, lanshare.ScanOptions{Timeout: 400 * time.Millisecond})
+		so := lanshare.ScanOptions{Timeout: 400 * time.Millisecond}
+		if !opts.Deep {
+			// Nothing to re-probe means nothing to do: do not fall through to a
+			// sweep, which is what an empty Targets list would otherwise mean.
+			if len(opts.Known) == 0 {
+				scanCh <- scanResult{nil, nil}
+				return
+			}
+			var targets []netip.Addr
+			for _, h := range opts.Known {
+				if a, err := netip.ParseAddr(h); err == nil {
+					targets = append(targets, a)
+				}
+			}
+			if len(targets) == 0 {
+				scanCh <- scanResult{nil, nil}
+				return
+			}
+			so.Targets = targets
+			// Enumerating tailnet peers runs the tailscale CLI. Keep that off the
+			// routine path; the deep pass still picks them up.
+			no := false
+			so.IncludeTailscale = &no
+		}
+		// The tailnet is enumerated rather than swept, so a deep pass stays cheap
+		// even though it reaches devices no local broadcast ever could.
+		peers, err := lanshare.Scan(ctx, so)
 		scanCh <- scanResult{peers, err}
 	}()
 
