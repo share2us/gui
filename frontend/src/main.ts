@@ -108,6 +108,9 @@ const state = {
   buildVersion: '' as string,
   // share modal
   dest: 'nearby' as Dest,
+  // Which half of the send flow is showing. Derived from dest so the two can
+  // never disagree; switching modes picks that half's default destination.
+  sendMode: 'device' as 'device' | 'link',
   bcAccess: 'approve' as 'all' | 'trusted' | 'approve',
   optionsOpen: false as boolean,
   netDest: '' as string,
@@ -350,11 +353,8 @@ function renderShare(): void {
     ${loginProgress()}
     <div class="modal-body" style="padding:14px 18px 24px">
       ${filesBlock()}
-      <details class="opt-card"${state.optionsOpen ? ' open' : ''}>
-        <summary class="opt-summary">＋ Options<span class="opt-hint">note, expiry, password</span></summary>
-        <div class="opt-body">${noteRow()}${expiryRow()}${checkRow('one-time', 'One-time (delete after first download)')}${passwordRow()}</div>
-      </details>
-      <div class="fld" style="gap:9px">Send to<div class="dest">${destPicker(s.loggedIn)}</div></div>
+      ${sendModeTabs()}
+      <div class="dest">${destPicker(s.loggedIn)}</div>
     </div>
     <footer class="modal-foot">
       ${footerReason() ? `<div class="foot-reason">${escapeHtml(footerReason())}</div>` : ''}
@@ -366,6 +366,15 @@ function renderShare(): void {
   wire();
 }
 
+// Two paths, because that is the question people actually ask: am I handing this
+// to someone who is here, or making a URL? Four co-equal radio cards mixed direct
+// transfers with hosted links and made both harder to find.
+function sendModeTabs(): string {
+  const tab = (m: 'device' | 'link', label: string) =>
+    `<button class="seg-btn${state.sendMode === m ? ' active' : ''}" data-send-mode="${m}">${label}</button>`;
+  return `<div class="seg">${tab('device', 'To a device')}${tab('link', 'Create a link')}</div>`;
+}
+
 function destPicker(loggedIn: boolean): string {
   const opt = (d: Dest, title: string, badge: string, body = '') => `
     <div class="dest-opt ${state.dest === d ? 'sel' : ''}" data-dest-opt="${d}">
@@ -374,16 +383,14 @@ function destPicker(loggedIn: boolean): string {
     </div>`;
   const guest = `<span class="free">guest</span>`;
   const need = `<span class="need">login required</span>`;
-  // Asked here rather than buried in Settings, because this is the moment the
-  // feature makes sense: the user is looking for nearby devices, so "you have to
-  // be discoverable too, and so do they" lands instead of sounding like a setting.
-  const discAsk = state.status?.discoverable
-    ? ''
-    : `<div class="warn-line">This device is not discoverable, so other devices cannot see it or send to you.
-         <button class="btn-mini" id="dest-make-disc">Make discoverable</button></div>`;
   const nearbyBody = `
-    <div style="font-size:12px;color:var(--muted)">Send straight to a device on your LAN</div>
-    ${discAsk}
+    <div style="font-size:12px;color:var(--text-2)">Send straight to a device on your LAN</div>
+    ${
+      state.status?.discoverable
+        ? ''
+        : `<div class="warn-line">This device is not discoverable, so other devices cannot see it or send to you.
+             <button class="btn-mini" id="dest-make-disc">Make discoverable</button></div>`
+    }
     ${
       state.peers.filter((p) => !p.isBroadcast).length
         ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code">${escapeHtml(p.code)}</span>` : ''}<button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" title="Send" style="margin-left:4px">→</button></div>`).join('')
@@ -392,19 +399,32 @@ function destPicker(loggedIn: boolean): string {
     <div class="or-line"><span>or a code</span></div>
     <input id="net-dest" type="text" placeholder="s2u://…  or  192.168.1.5" value="${escapeHtml(state.netDest)}" />`;
   const bcBody = `
-    <div style="font-size:12px;color:var(--muted)">Who can download</div>
+    <div style="font-size:12px;color:var(--text-2)">Who can download</div>
     <div class="modes">
       ${bcMode('all', 'Allow all', 'anyone nearby')}
       ${bcMode('trusted', 'Trusted only', 'pick trusted devices')}
       ${bcMode('approve', 'Approve each', 'you allow every download')}
     </div>`;
+
+  if (state.sendMode === 'device') {
+    return (
+      opt('nearby', 'A device on this network', guest, nearbyBody) +
+      opt('broadcast', 'Everyone nearby', guest, bcBody)
+    );
+  }
+  // Link options (expiry, password, one-time, note) only mean something here, so
+  // they live on this path instead of sitting under every destination.
+  const linkBody = `
+    <details class="opt-card"${state.optionsOpen ? ' open' : ''} style="margin-top:9px">
+      <summary class="opt-summary">＋ Options<span class="opt-hint">note, expiry, password</span></summary>
+      <div class="opt-body">${noteRow()}${expiryRow()}${checkRow('one-time', 'One-time (delete after first download)')}${passwordRow()}</div>
+    </details>`;
   return (
-    opt('nearby', 'Nearby device — direct', guest, nearbyBody) +
-    opt('broadcast', 'Broadcast to everyone nearby', guest, bcBody) +
-    opt('public', 'Public link', loggedIn ? '' : need) +
-    opt('private', 'Private (email)', loggedIn ? '' : need)
+    opt('public', 'Anyone with the link', loggedIn ? '' : need, linkBody) +
+    opt('private', 'Only these people', loggedIn ? '' : need, linkBody)
   );
 }
+
 
 function bcMode(m: string, label: string, sub: string): string {
   return `<div class="mode ${state.bcAccess === m ? 'on' : ''}" data-bc-mode="${m}"><span class="r"></span>${label} <small>— ${sub}</small></div>`;
@@ -594,10 +614,20 @@ function trustedBlock(): string {
 // ---- Primary button (share modal) ------------------------------------------
 
 function primaryLabel(): string {
-  if (state.dest === 'broadcast') return 'Start broadcast';
-  if (state.dest === 'nearby') return 'Send';
-  return 'Create link';
+  const n = state.paths.length;
+  const files = `${n} file${n === 1 ? '' : 's'}`;
+  if (state.dest === 'broadcast') return n ? `Broadcast ${files} to everyone nearby` : 'Start broadcast';
+  if (state.dest === 'nearby') {
+    // Name the destination only when one has actually been chosen — a typed
+    // address or code. Guessing "the first device we happened to find" would put
+    // a name on the button that the user never picked, which is worse than
+    // saying less. Choosing a device from the list sends immediately, so there
+    // is no selected-but-unsent state to describe.
+    return n ? (state.netDest ? `Send ${files} to ${state.netDest}` : `Send ${files}`) : 'Send';
+  }
+  return n ? `Create link for ${files}` : 'Create link';
 }
+
 function canPrimary(): boolean {
   if (!state.paths.length) return false;
   if (state.dest === 'public' || state.dest === 'private') return !!state.status?.loggedIn;
@@ -784,6 +814,17 @@ function wire() {
   });
   // Settings is one click from the strip now, wherever the user is looking.
   // Full history is the portal's job; this window shows the last few.
+  // Switching halves also moves the selection, so the picker is never showing a
+  // destination that belongs to the other tab.
+  root.querySelectorAll<HTMLElement>('[data-send-mode]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const m = el.dataset.sendMode as 'device' | 'link';
+      if (state.sendMode === m) return;
+      state.sendMode = m;
+      state.dest = m === 'device' ? 'nearby' : 'public';
+      render();
+    }),
+  );
   on('#open-history', 'click', () => {
     const rt = (window as any).runtime;
     rt?.BrowserOpenURL?.('https://portal.share2.us/activity');
