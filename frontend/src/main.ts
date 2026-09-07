@@ -23,6 +23,10 @@ type ShareRequest = {
 };
 type ShareOutcome = { path: string; ok: boolean; link?: string; error?: string };
 type LoginInfo = { userCode: string; verificationUrl: string; verificationUri: string };
+// A file that has arrived and is waiting in staging until the user says where it
+// goes. Deliberately not written to a default folder behind their back.
+type Incoming = { id: string; name: string; size: number; from: string; at: string; file: string };
+
 type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string; channel: string; prerelease: boolean };
 type LanPeer = {
   name: string; addr: string; dest: string; code: string; mode: string;
@@ -56,6 +60,12 @@ interface AppBackend {
   IsStoreManaged(): Promise<boolean>;
   UpdateChannel(): Promise<string>;
   BuildVersion(): Promise<string>;
+  IncomingList(): Promise<Incoming[]>;
+  IncomingFolder(): Promise<string>;
+  SetIncomingFolder(dir: string): Promise<void>;
+  ChooseIncomingFolder(): Promise<string>;
+  SaveIncoming(id: string): Promise<string>;
+  DiscardIncoming(id: string): Promise<void>;
   SetUpdateChannel(channel: string): Promise<void>;
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
   LanBrowse(): Promise<LanPeer[]>;
@@ -99,10 +109,21 @@ const state = {
   storeManaged: false as boolean, // Microsoft Store build/install -> updater hidden
   updateChannel: 'stable' as string, // 'stable' | 'beta'; shared with the CLI via config.json
 
+  incoming: [] as Incoming[], // staged arrivals awaiting a save location
+  incomingFolder: '' as string, // remembered destination; '' means ask each time
+  pendingRemember: '' as string, // folder just used, offered as the default once
+  shaiOpen: false as boolean, // the coming-soon panel behind the header launcher
+  // The device chosen to send to. Picking one SELECTS it rather than sending
+  // immediately, so the button can name it truthfully and there is a moment to
+  // notice you picked the wrong machine before the file leaves.
+  picked: null as { dest: string; name: string } | null,
   scanInterval: 60 as number,
   buildVersion: '' as string,
   // share modal
   dest: 'nearby' as Dest,
+  // Which half of the send flow is showing. Derived from dest so the two can
+  // never disagree; switching modes picks that half's default destination.
+  sendMode: 'device' as 'device' | 'link',
   bcAccess: 'approve' as 'all' | 'trusted' | 'approve',
   optionsOpen: false as boolean,
   netDest: '' as string,
@@ -136,6 +157,8 @@ async function boot() {
     state.storeManaged = await backend().IsStoreManaged().catch(() => false);
     state.updateChannel = await backend().UpdateChannel().catch(() => 'stable');
     state.buildVersion = await backend().BuildVersion().catch(() => '');
+    state.incomingFolder = await backend().IncomingFolder().catch(() => '');
+    await refreshIncoming();
     state.bc = await backend().BroadcastStats().catch(() => null);
     if (state.bc && !state.bc.active) state.bc = null;
     // Opened via the Share verb with files -> jump straight to the Share modal.
@@ -163,24 +186,74 @@ function render(): void {
 
 function header(): string {
   const s = state.status!;
+  // Update sits beside the account because both answer the same question: is this
+  // app of mine in good order? The dot IS the notification, so nothing appears or
+  // disappears and the row never reflows (design rule: no layout shift).
+  const upd = state.storeManaged
+    ? ''
+    : `<button class="icon-btn${state.update?.available ? ' has-dot' : ''}" id="check-update" title="${state.update?.available ? 'Update available' : 'Check for updates'}">⟳</button>`;
   return `<header class="modal-head">
     <div class="brand">${BRAND_SVG}<span>Share2Us</span></div>
     <div class="head-actions">
-      <button class="icon-btn" id="theme-toggle" title="Toggle light/dark">${state.theme === 'dark' ? '☀' : '☾'}</button>
-      ${state.storeManaged ? '' : `<button class="icon-btn" id="check-update" title="Check for updates">⟳</button>`}
       ${
         s.loggedIn
-          ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span><button class="btn-hdr" id="logout-btn">Logout</button>`
+          ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span>`
           : `<button class="btn-hdr" id="login-btn">Login</button>`
       }
+      <button class="icon-btn shai-btn" id="shai-open" title="Shai — coming soon">✦</button>
+      ${upd}
     </div>
   </header>`;
 }
 
-function discBanner(): string {
-  if (!state.status?.discoverable) return '';
-  const code = state.discCode ? `<b>Verify code ${escapeHtml(state.discCode)}</b>${state.discSafety ? ` · <span class="hint" title="Compare this before another device trusts this one">safety number <b>${escapeHtml(state.discSafety)}</b></span>` : ''}` : 'starting…';
-  return `<div class="disc-bar">📡 Discoverable — nearby devices can send you files. ${code}</div>`;
+
+
+// Persistent status strip along the bottom. Discoverability lives here rather
+// than inside a collapsed Settings block, because it decides whether anyone can
+// find this machine and hiding it produced a "nearby share is not working"
+// report that was nothing of the kind. The theme toggle sits at the far left:
+// it is set once and then never touched, so it does not deserve header space.
+function statusStrip(): string {
+  const on = !!state.status?.discoverable;
+  const code = on && state.discCode ? ` · code ${escapeHtml(state.discCode)}` : '';
+  const near = state.peers.filter((p) => !p.isBroadcast).length;
+  return `<div class="status-strip">
+    <button class="strip-theme" id="theme-toggle" title="Toggle light/dark">${state.theme === 'dark' ? '☀' : '☾'}</button>
+    <span class="strip-dot${on ? '' : ' off'}"></span>
+    <span class="strip-txt">${on ? `Discoverable${near ? ` · ${near} nearby` : ''}${code}` : 'Not discoverable'}</span>
+    <span class="strip-sp"></span>
+    <button class="strip-link" id="open-settings">Settings</button>
+  </div>`;
+}
+
+// Shai's shell. The agent, chat and voice are not built (todo I); this says so
+// plainly and describes what it will do, including the part people are right to
+// ask about first: what it will never do without permission.
+//
+// Drawn as unmistakably unavailable rather than dressed up as live, because a
+// control that looks working and does nothing gets reported as a bug.
+function shaiPanel(): string {
+  if (!state.shaiOpen) return '';
+  return `<div class="shai-panel" id="shai-panel">
+    <div class="shai-head">
+      <span class="shai-av">✦</span>
+      <b>Shai</b>
+      <span class="shai-soon">Coming soon</span>
+      <button class="ib" id="shai-close" title="Close" style="margin-left:auto">✕</button>
+    </div>
+    <div class="shai-body">
+      Ask for the outcome and Shai does the steps, instead of you finding the screen:
+      <ul>
+        <li><b>“Send this folder to my laptop”</b></li>
+        <li><b>“Make a link that expires tomorrow”</b></li>
+        <li><b>“Who downloaded the report?”</b></li>
+      </ul>
+      Anything that cannot be undone, such as revoking a link, deleting a share or
+      trusting a device, it asks you to confirm first. It can never do more than
+      you can.
+    </div>
+    <div class="shai-ask">Ask Shai…<span class="shai-mic">🎙</span></div>
+  </div>`;
 }
 
 // ---- Home ------------------------------------------------------------------
@@ -201,40 +274,75 @@ function renderHome(): void {
   root.innerHTML = `<div class="modal">
     ${header()}
     ${updateBanner()}
-    ${discBanner()}
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
-      <div class="sec-head"><b>Activity &amp; nearby</b><button class="refresh" id="nearby-find" title="Refresh (auto every ${state.scanInterval || 60}s)">↻</button></div>
-      <div class="feed-scroll">${feed()}</div>
+      <div class="feed-scroll">${sectionNearby()}${sectionIncoming()}${sectionRecent()}</div>
       ${settingsBlock()}
     </div>
     ${state.requests.length ? requestOverlay(state.requests[0]) : ''}
     ${state.trustPrompt && !state.requests.length ? trustCodeOverlay(state.trustPrompt) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
+    ${shaiPanel()}
+    ${statusStrip()}
     ${buildStrip()}
   </div>`;
   wire();
 }
 
-function feed(): string {
+// Home is three separate questions, not one list: who can I reach, what has
+// arrived that I have not filed, and what happened lately. They used to share a
+// single "Activity & nearby" feed, which answered none of them well.
+function sectionNearby(): string {
   const rows: string[] = [];
-  // Incoming approval prompts that aren't shown as an overlay yet still queue;
-  // the head is the overlay. Broadcasts + your live broadcast + log below.
-  for (const p of state.peers.filter((x) => x.isBroadcast)) {
-    rows.push(bcastRow(p));
-  }
+  for (const p of state.peers.filter((x) => x.isBroadcast)) rows.push(bcastRow(p));
   if (state.bc && state.bc.active) rows.push(liveRow(state.bc));
-  for (const p of state.peers.filter((x) => !x.isBroadcast)) {
-    rows.push(nearbyRow(p));
-  }
-  for (const a of state.activity) rows.push(logRow(a));
-  if (!rows.length) {
-    return `<div class="empty">Nothing yet. Press ↻ to scan — a nearby device shows up only while Share2Us is open on it with “Discoverable on local network” turned on.</div>`;
-  }
-  return rows.join('');
+  for (const p of state.peers.filter((x) => !x.isBroadcast)) rows.push(nearbyRow(p));
+  const body = rows.length
+    ? rows.join('')
+    : `<div class="empty">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on. Press ↻ to scan again.</div>`;
+  return `<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" title="Refresh (auto every ${state.scanInterval || 60}s)">↻</button></div>${body}`;
 }
+
+// Only rendered when something is waiting: an empty section would be a permanent
+// reminder of nothing.
+function sectionIncoming(): string {
+  // The offer to remember a folder must outlive the list. Saving the LAST
+  // waiting file empties it, and an early return here made the offer disappear
+  // at exactly the moment it was earned.
+  const remember = state.pendingRemember
+    ? `<div class="warn-line">Always save received files to <b>${escapeHtml(state.pendingRemember)}</b>?
+         <button class="btn-mini" id="remember-folder">Always save here</button>
+         <button class="btn-mini" id="remember-dismiss" style="background:transparent;color:var(--text-2)">Not now</button></div>`
+    : '';
+  if (!state.incoming.length) {
+    return remember ? `<div class="sec-head"><b>Incoming</b></div>${remember}` : '';
+  }
+  const rows = state.incoming
+    .map(
+      (f) => `<div class="item">
+      <div class="ico">📥</div>
+      <div class="line"><b>${escapeHtml(f.name)}</b> <span class="meta">· ${fmtBytes(f.size)} · from ${escapeHtml(f.from)}</span></div>
+      <div class="acts"><button class="ib save-incoming" data-id="${escapeHtml(f.id)}" title="Save to this device">⤓</button></div>
+    </div>`,
+    )
+    .join('');
+  return `<div class="sec-head"><b>Incoming</b><span class="meta">waiting to be saved</span></div>${rows}${remember}`;
+}
+
+// Capped at five. The full history lives in the portal rather than being rebuilt
+// here, so this stays a glance and not a second product.
+function sectionRecent(): string {
+  const all = state.activity;
+  if (!all.length) return '';
+  const rows = all.slice(0, 5).map(logRow).join('');
+  const more = all.length > 5
+    ? `<div class="item log"><div class="line"><button class="strip-link" id="open-history">Show all in the portal ↗</button></div></div>`
+    : '';
+  return `<div class="sec-head"><b>Recent</b></div>${rows}${more}`;
+}
+
 
 function bcastRow(p: LanPeer): string {
   return `<div class="item warn">
@@ -301,19 +409,27 @@ function renderShare(): void {
     ${loginProgress()}
     <div class="modal-body" style="padding:14px 18px 24px">
       ${filesBlock()}
-      <details class="opt-card"${state.optionsOpen ? ' open' : ''}>
-        <summary class="opt-summary">＋ Options<span class="opt-hint">note, expiry, password</span></summary>
-        <div class="opt-body">${noteRow()}${expiryRow()}${checkRow('one-time', 'One-time (delete after first download)')}${passwordRow()}</div>
-      </details>
-      <div class="fld" style="gap:9px">Send to<div class="dest">${destPicker(s.loggedIn)}</div></div>
+      ${sendModeTabs()}
+      <div class="dest">${destPicker(s.loggedIn)}</div>
     </div>
     <footer class="modal-foot">
       ${footerReason() ? `<div class="foot-reason">${escapeHtml(footerReason())}</div>` : ''}
       <button class="btn-primary" id="primary-btn" ${canPrimary() ? '' : 'disabled'}>${escapeHtml(primaryLabel())}</button>
     </footer>
+    ${shaiPanel()}
+    ${statusStrip()}
     ${buildStrip()}
   </div>`;
   wire();
+}
+
+// Two paths, because that is the question people actually ask: am I handing this
+// to someone who is here, or making a URL? Four co-equal radio cards mixed direct
+// transfers with hosted links and made both harder to find.
+function sendModeTabs(): string {
+  const tab = (m: 'device' | 'link', label: string) =>
+    `<button class="seg-btn${state.sendMode === m ? ' active' : ''}" data-send-mode="${m}">${label}</button>`;
+  return `<div class="seg">${tab('device', 'To a device')}${tab('link', 'Create a link')}</div>`;
 }
 
 function destPicker(loggedIn: boolean): string {
@@ -324,37 +440,48 @@ function destPicker(loggedIn: boolean): string {
     </div>`;
   const guest = `<span class="free">guest</span>`;
   const need = `<span class="need">login required</span>`;
-  // Asked here rather than buried in Settings, because this is the moment the
-  // feature makes sense: the user is looking for nearby devices, so "you have to
-  // be discoverable too, and so do they" lands instead of sounding like a setting.
-  const discAsk = state.status?.discoverable
-    ? ''
-    : `<div class="warn-line">This device is not discoverable, so other devices cannot see it or send to you.
-         <button class="btn-mini" id="dest-make-disc">Make discoverable</button></div>`;
   const nearbyBody = `
-    <div style="font-size:12px;color:var(--muted)">Send straight to a device on your LAN</div>
-    ${discAsk}
+    <div style="font-size:12px;color:var(--text-2)">Send straight to a device on your LAN</div>
+    ${
+      state.status?.discoverable
+        ? ''
+        : `<div class="warn-line">This device is not discoverable, so other devices cannot see it or send to you.
+             <button class="btn-mini" id="dest-make-disc">Make discoverable</button></div>`
+    }
     ${
       state.peers.filter((p) => !p.isBroadcast).length
-        ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code">${escapeHtml(p.code)}</span>` : ''}<button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" title="Send" style="margin-left:4px">→</button></div>`).join('')
+        ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev${state.picked?.dest === p.dest ? ' picked' : ''}"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code">${escapeHtml(p.code)}</span>` : ''}<button class="ib${state.picked?.dest === p.dest ? ' on' : ''} pick-dev" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(p.name)}" title="${state.picked?.dest === p.dest ? 'Selected' : 'Select this device'}" style="margin-left:4px">${state.picked?.dest === p.dest ? '✓' : '→'}</button></div>`).join('')
         : `<div class="hint">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — turn that on over there, then press ↻ on Home. Or paste its code below.</div>`
     }
     <div class="or-line"><span>or a code</span></div>
     <input id="net-dest" type="text" placeholder="s2u://…  or  192.168.1.5" value="${escapeHtml(state.netDest)}" />`;
   const bcBody = `
-    <div style="font-size:12px;color:var(--muted)">Who can download</div>
+    <div style="font-size:12px;color:var(--text-2)">Who can download</div>
     <div class="modes">
       ${bcMode('all', 'Allow all', 'anyone nearby')}
       ${bcMode('trusted', 'Trusted only', 'pick trusted devices')}
       ${bcMode('approve', 'Approve each', 'you allow every download')}
     </div>`;
+
+  if (state.sendMode === 'device') {
+    return (
+      opt('nearby', 'A device on this network', guest, nearbyBody) +
+      opt('broadcast', 'Everyone nearby', guest, bcBody)
+    );
+  }
+  // Link options (expiry, password, one-time, note) only mean something here, so
+  // they live on this path instead of sitting under every destination.
+  const linkBody = `
+    <details class="opt-card"${state.optionsOpen ? ' open' : ''} style="margin-top:9px">
+      <summary class="opt-summary">＋ Options<span class="opt-hint">note, expiry, password</span></summary>
+      <div class="opt-body">${noteRow()}${expiryRow()}${checkRow('one-time', 'One-time (delete after first download)')}${passwordRow()}</div>
+    </details>`;
   return (
-    opt('nearby', 'Nearby device — direct', guest, nearbyBody) +
-    opt('broadcast', 'Broadcast to everyone nearby', guest, bcBody) +
-    opt('public', 'Public link', loggedIn ? '' : need) +
-    opt('private', 'Private (email)', loggedIn ? '' : need)
+    opt('public', 'Anyone with the link', loggedIn ? '' : need, linkBody) +
+    opt('private', 'Only these people', loggedIn ? '' : need, linkBody)
   );
 }
+
 
 function bcMode(m: string, label: string, sub: string): string {
   return `<div class="mode ${state.bcAccess === m ? 'on' : ''}" data-bc-mode="${m}"><span class="r"></span>${label} <small>— ${sub}</small></div>`;
@@ -382,6 +509,8 @@ function renderBroadcast(): void {
       ${completed.length ? `<div class="grp-label" style="margin-top:18px">Downloaded · <span class="n">${completed.length}</span></div>${completed.map(doneRow).join('')}` : ''}
       ${!downloading.length && !completed.length ? `<div class="empty">Waiting for someone to download… they'll see it when they scan nearby.</div>` : ''}
     </div>
+    ${shaiPanel()}
+    ${statusStrip()}
     ${buildStrip()}
   </div>`;
   wire();
@@ -531,6 +660,14 @@ function settingsBlock(): string {
       <label class="setting-row${state.storeManaged ? ' is-disabled' : ''}"><input type="checkbox" id="set-beta" ${state.updateChannel === 'beta' ? 'checked' : ''} ${state.storeManaged ? 'disabled' : ''} /><span class="setting-label">Get beta builds<span class="setting-help">${state.storeManaged ? 'The Microsoft Store manages updates for this install.' : 'Pre-release builds before they reach everyone. Also switches the s2u command line on this machine.'}</span></span></label>
       ${trustedBlock()}
       ${state.activity.length ? `<button class="btn-mini" id="clear-activity">Clear activity log</button>` : ''}
+      <div class="setting-row" style="justify-content:space-between">
+        <span class="setting-label">Received files${state.incomingFolder ? '' : ' · you are asked each time'}<span class="setting-help">${state.incomingFolder ? escapeHtml(state.incomingFolder) : 'Nothing is saved anywhere until you choose.'}</span></span>
+        <span style="display:flex;gap:6px;flex:none">
+          <button class="btn-hdr" id="change-folder">Change</button>
+          ${state.incomingFolder ? `<button class="btn-hdr" id="clear-folder">Ask each time</button>` : ''}
+        </span>
+      </div>
+      ${s.loggedIn ? `<div class="setting-row" style="justify-content:space-between"><span class="setting-label">Signed in as ${escapeHtml(s.email)}</span><button class="btn-hdr" id="logout-btn">Log out</button></div>` : ''}
     </div>
   </details>`;
 }
@@ -542,25 +679,38 @@ function trustedBlock(): string {
 // ---- Primary button (share modal) ------------------------------------------
 
 function primaryLabel(): string {
-  if (state.dest === 'broadcast') return 'Start broadcast';
-  if (state.dest === 'nearby') return 'Send';
-  return 'Create link';
+  const n = state.paths.length;
+  const files = `${n} file${n === 1 ? '' : 's'}`;
+  if (state.dest === 'broadcast') return n ? `Broadcast ${files} to everyone nearby` : 'Start broadcast';
+  if (state.dest === 'nearby') {
+    // Only ever names a device the user actually selected. A typed address counts
+    // as a choice too; what it will not do is name whichever device happened to
+    // answer the scan first.
+    const target = state.picked?.name || state.netDest.trim();
+    return n && target ? `Send ${files} to ${target}` : `Send ${files}`;
+  }
+  return n ? `Create link for ${files}` : 'Create link';
 }
+
 function canPrimary(): boolean {
   if (!state.paths.length) return false;
   if (state.dest === 'public' || state.dest === 'private') return !!state.status?.loggedIn;
+  // A direct send needs a destination. The button stays present and disabled
+  // rather than appearing once one is chosen, so nothing reflows.
+  if (state.dest === 'nearby') return !!(state.picked || state.netDest.trim());
   return true;
 }
 function footerReason(): string {
   if (!state.paths.length) return 'Add a file above to share.';
   if ((state.dest === 'public' || state.dest === 'private') && !state.status?.loggedIn) return 'Login to share to the cloud.';
-  if (state.dest === 'nearby') return 'Pick a device above, or enter a code and press Send.';
+  if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter a code.';
   return '';
 }
 async function onPrimary() {
   if (state.dest === 'broadcast') return startBroadcast();
   if (state.dest === 'nearby') {
-    const dest = (root.querySelector<HTMLInputElement>('#net-dest')?.value || '').trim();
+    const typed = (root.querySelector<HTMLInputElement>('#net-dest')?.value || '').trim();
+    const dest = typed || state.picked?.dest || '';
     if (!dest) { root.querySelector<HTMLInputElement>('#net-dest')?.focus(); return; }
     return sendTo(dest);
   }
@@ -572,6 +722,7 @@ async function sendTo(dest: string) {
   const ok = outcomes.every((o) => o.ok);
   state.view = 'home';
   state.paths = [];
+  state.picked = null;
   await refreshActivity();
   render();
   if (!ok) toast(outcomes.find((o) => !o.ok)?.error || 'Send failed');
@@ -640,6 +791,7 @@ async function stopBroadcast() {
 
 // ---- Data refresh ----------------------------------------------------------
 
+async function refreshIncoming() { try { state.incoming = (await backend().IncomingList()) || []; } catch { /* */ } }
 async function refreshActivity() { try { state.activity = (await backend().ActivityLog()) || []; } catch { /* */ } }
 async function loadTrusted() { try { state.trusted = (await backend().ListTrusted()) || []; render(); } catch { /* */ } }
 let scanTimer = 0;
@@ -648,9 +800,16 @@ async function findNearby(quiet = false) {
   state.browsing = true; if (!quiet) render();
   try { state.peers = (await backend().LanBrowse()) || []; } catch { /* keep last list */ }
   state.browsing = false;
-  // Only repaint the feed when we're actually looking at it, so a background
-  // scan never yanks an open modal out from under the user.
-  if (state.view === 'home') render();
+  // Repaint where the result is actually on screen. Home always; the share modal
+  // too when its device list is showing, because that list arrives AFTER the
+  // modal does when the app is opened straight into Share from the file manager
+  // — without this the user is asked to pick a device from an empty list.
+  //
+  // Never while the address box has focus: a repaint mid-keystroke would take the
+  // caret away, which is exactly the "yanked out from under you" this guard was
+  // written to prevent.
+  const typing = root.querySelector('#net-dest') === document.activeElement;
+  if (state.view === 'home' || (state.view === 'share' && state.dest === 'nearby' && !typing)) render();
 }
 
 // startScanTimer re-scans for nearby devices/broadcasts every scanInterval
@@ -688,10 +847,21 @@ function wire() {
   root.querySelectorAll('#bc-stop').forEach((b) => b.addEventListener('click', stopBroadcast));
   root.querySelector('#live-row')?.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest('#bc-stop')) { state.view = 'broadcast'; render(); } });
   on('.chip-x', 'click', (e) => { state.paths.splice(Number((e.currentTarget as HTMLElement).dataset.i), 1); render(); });
+  // Picking a device selects it; the send happens from the primary button. The
+  // old behaviour fired the transfer straight from this row, which left no
+  // moment to notice you had picked the wrong machine.
+  root.querySelectorAll<HTMLElement>('.pick-dev').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const dest = el.dataset.dest || '';
+      state.picked = state.picked?.dest === dest ? null : { dest, name: el.dataset.name || dest };
+      render();
+    }),
+  );
   on('.send-to', 'click', (e) => sendTo((e.currentTarget as HTMLElement).dataset.dest || ''));
   on('.dl-btn', 'click', (e) => { const fp = (e.currentTarget as HTMLElement).dataset.fp; const p = state.peers.find((x) => x.isBroadcast && x.fingerprint === fp); if (p) { state.dl = p; render(); } });
   on('.dest-opt', 'click', (e) => { state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest; render(); });
-  on('.dest-opt input, .dest-opt .send-to, .dest-opt .mode', 'click', (e) => e.stopPropagation());
+  on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .mode', 'click', (e) => e.stopPropagation());
   on('.mode', 'click', (e) => { state.bcAccess = (e.currentTarget as HTMLElement).dataset.bcMode as any; render(); });
   const nd = root.querySelector<HTMLInputElement>('#net-dest');
   nd?.addEventListener('input', () => (state.netDest = nd.value));
@@ -730,6 +900,66 @@ function wire() {
       findNearby();
     } catch (e) { toast(String(e)); }
   });
+  // Settings is one click from the strip now, wherever the user is looking.
+  // Full history is the portal's job; this window shows the last few.
+  // Switching halves also moves the selection, so the picker is never showing a
+  // destination that belongs to the other tab.
+  root.querySelectorAll<HTMLElement>('[data-send-mode]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const m = el.dataset.sendMode as 'device' | 'link';
+      if (state.sendMode === m) return;
+      state.sendMode = m;
+      state.dest = m === 'device' ? 'nearby' : 'public';
+      render();
+    }),
+  );
+  // Save a waiting arrival. The native dialog cannot carry a "remember this"
+  // checkbox, so the offer comes after the save, once, and only while no folder
+  // is set — asking again every time would be nagging.
+  root.querySelectorAll<HTMLElement>('.save-incoming').forEach((el) =>
+    el.addEventListener('click', async () => {
+      const id = el.dataset.id || '';
+      try {
+        const folder = await backend().SaveIncoming(id);
+        if (!folder) return; // cancelled: the file is still waiting
+        await refreshIncoming();
+        if (!state.incomingFolder) {
+          state.pendingRemember = folder;
+        } else {
+          toast('Saved');
+        }
+        render();
+      } catch (e) { toast(String(e)); }
+    }),
+  );
+  on('#remember-folder', 'click', async () => {
+    const dir = state.pendingRemember;
+    state.pendingRemember = '';
+    try { await backend().SetIncomingFolder(dir); state.incomingFolder = dir; toast('Received files will be saved there'); }
+    catch (e) { toast(String(e)); }
+    render();
+  });
+  on('#remember-dismiss', 'click', () => { state.pendingRemember = ''; render(); });
+  on('#change-folder', 'click', async () => {
+    try {
+      const dir = await backend().ChooseIncomingFolder();
+      if (dir) { state.incomingFolder = dir; toast('Received files will be saved there'); render(); }
+    } catch (e) { toast(String(e)); }
+  });
+  on('#clear-folder', 'click', async () => {
+    try { await backend().SetIncomingFolder(''); state.incomingFolder = ''; toast('You will be asked each time'); render(); }
+    catch (e) { toast(String(e)); }
+  });
+  on('#open-history', 'click', () => {
+    const rt = (window as any).runtime;
+    rt?.BrowserOpenURL?.('https://portal.share2.us/activity');
+  });
+  on('#open-settings', 'click', () => {
+    const d = root.querySelector<HTMLDetailsElement>('details.settings');
+    if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+  });
+  on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
+  on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
   disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) state.discCode = ''; render(); } catch { disc.checked = !disc.checked; } });
   const si = root.querySelector<HTMLSelectElement>('#scan-interval');
@@ -849,6 +1079,7 @@ function setupListeners() {
     render();
   });
   rt?.EventsOn?.('lan-recv-done', () => { refreshActivity().then(render); });
+  rt?.EventsOn?.('incoming-changed', () => { refreshIncoming().then(render); });
   rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); state.discSafety = String(d?.safety || ''); render(); } });
   rt?.EventsOn?.('lan-bc-conn', async () => { try { state.bc = await backend().BroadcastStats(); if (state.view === 'broadcast' || (state.view === 'home')) render(); } catch { /* */ } });
   window.addEventListener('focus', () => checkClipboard());
