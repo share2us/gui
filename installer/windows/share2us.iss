@@ -88,11 +88,25 @@ Name: "{userdesktop}\Share2Us"; Filename: "{app}\{#GuiExe}"; Components: gui; Ta
 ; Allow the app inbound on the local network so device discovery (mDNS multicast,
 ; UDP 5353) and incoming transfers work. Without an explicit rule Windows Firewall
 ; blocks inbound by default, and mDNS multicast RECEIVE often never triggers the
-; interactive "allow" prompt — so "nearby devices" stays empty. Program-scoped
-; (covers the ephemeral TCP transfer port + UDP mDNS), private+domain profiles
-; only (LAN sharing is for trusted networks; the app's own PAKE/approval gates
-; every transfer). The installer is elevated, so netsh can add it.
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Share2Us local sharing"" dir=in action=allow program=""{app}\{#GuiExe}"" enable=yes profile=private,domain"; Components: gui; Flags: runhidden; StatusMsg: "Allowing local-network sharing through Windows Firewall..."
+; interactive "allow" prompt — so "nearby devices" stays empty. Program-scoped, so
+; it covers the TCP transfer port and UDP mDNS without naming either.
+;
+; ALL profiles, including public. Firewall rules are per-profile, so the earlier
+; private+domain rule simply did not apply on a network Windows had classified as
+; Public — and Windows classifies plenty of ordinary home networks that way,
+; including behind an Apple router. The result was two laptops on the same Wi-Fi
+; that could never see each other, with nothing on screen to say why (owner,
+; 2026-09-07).
+;
+; The exposure this accepts is a listening port and an advertisement, not open
+; file acceptance: every inbound transfer is approved by the user, an untrusted
+; sender is shown with a verify code to compare, and trusting a device needs a
+; second factor. The installer is elevated, so netsh can add it.
+; Remove any rule from a previous install first: netsh ADDS a second rule with the
+; same name rather than replacing one, so upgrades would otherwise stack copies —
+; including the old private-only rule this replaces.
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Share2Us local sharing"""; Components: gui; Flags: runhidden
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Share2Us local sharing"" dir=in action=allow program=""{app}\{#GuiExe}"" enable=yes profile=any"; Components: gui; Flags: runhidden; StatusMsg: "Allowing local-network sharing through Windows Firewall..."
 ; Register the Explorer right-click integration for the current user.
 Filename: "{app}\{#GuiExe}"; Parameters: "--install-shell"; Components: gui; Flags: runhidden
 ; Optionally start the background receiver at login.

@@ -17,6 +17,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Fixed
+- **Windows Firewall no longer blocks sharing on a "Public" network.** The
+  installer's firewall rule only covered Private and Domain networks, and Windows
+  classifies plenty of ordinary home networks as Public — including behind an
+  Apple router. On those, inbound discovery and transfers were dropped with
+  nothing on screen to say why, so two laptops on the same Wi-Fi could never see
+  each other. The rule now covers every profile, and reinstalling replaces the old
+  rule instead of stacking a second one.
+- **The app now says so when Windows has the network set to Public**, with a
+  button to open the Windows network settings. It only says it when Windows
+  actually reported Public: an uncertain answer says nothing, rather than telling
+  you something about your network that may not be true.
 - **No more console window flashing on Windows.** Looking for nearby devices ran
   the `tailscale` command each time, and a desktop app starting a console program
   opens a console. It now runs hidden, and is not run at all when Tailscale is

@@ -28,6 +28,11 @@ type LoginInfo = { userCode: string; verificationUrl: string; verificationUri: s
 type Incoming = { id: string; name: string; size: number; from: string; at: string; file: string };
 
 type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string; channel: string; prerelease: boolean };
+type NetProfile = { category: number; name: string; supported: boolean };
+// Mirrors internal/netprofile.Category. 0 is "could not tell": the UI stays
+// silent on it rather than guessing at the user's network.
+const NET_PUBLIC = 1;
+
 type LanPeer = {
   name: string; addr: string; dest: string; code: string; mode: string;
   fingerprint: string; isBroadcast: boolean; fileName: string; fileSize: number;
@@ -73,6 +78,8 @@ interface AppBackend {
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
   LanBrowse(deep: boolean): Promise<LanPeer[]>;
   LocalAddresses(): Promise<string[]>;
+  NetworkProfile(): Promise<NetProfile>;
+  OpenNetworkSettings(): Promise<void>;
   SetDiscoverable(on: boolean): Promise<void>;
   RespondLanRequest(id: string, accept: boolean): Promise<void>;
   TrustDevice(fingerprint: string, name: string, mode: string): Promise<TrustChallenge>;
@@ -107,7 +114,8 @@ const state = {
   bc: null as BroadcastState | null, // live broadcast
   discCode: '' as string,
   discAddr: '' as string, // this device's own ip:port, so the user can match it against a device list without hunting for it
-  localAddrs: [] as string[], // every IPv4 this machine has, for the strip's tooltip
+  localAddrs: [] as string[],
+  netProfile: null as NetProfile | null, // every IPv4 this machine has, for the strip's tooltip
   discSafety: '' as string, // this device's safety number (compare before trusting it from elsewhere)
   clip: null as ClipSuggestion | null,
   theme: 'dark' as 'dark' | 'light',
@@ -158,6 +166,7 @@ async function boot() {
     state.paths = paths || [];
     state.scanInterval = await backend().GetScanInterval().catch(() => 60);
     state.localAddrs = await backend().LocalAddresses().catch(() => []) || [];
+    state.netProfile = await backend().NetworkProfile().catch(() => null);
     state.storeManaged = await backend().IsStoreManaged().catch(() => false);
     state.updateChannel = await backend().UpdateChannel().catch(() => 'stable');
     state.buildVersion = await backend().BuildVersion().catch(() => '');
@@ -301,6 +310,20 @@ function renderHome(): void {
 // Home is three separate questions, not one list: who can I reach, what has
 // arrived that I have not filed, and what happened lately. They used to share a
 // single "Activity & nearby" feed, which answered none of them well.
+// Windows filters by network classification, so a rule scoped to Private does
+// nothing on a network it calls Public — discovery and inbound transfers are
+// dropped with nothing on screen to say why. Shown only when the OS actually
+// reported Public: an undetermined answer says nothing at all.
+function publicNetworkNotice(): string {
+  const p = state.netProfile;
+  if (!p || !p.supported || p.category !== NET_PUBLIC) return '';
+  const where = p.name ? ` (${escapeHtml(p.name)})` : '';
+  return `<div class="warn-line" id="net-public-note">
+    Windows has this network${where} set to <b>Public</b>, which blocks other devices from reaching this one. Sharing still works if you set it to Private, and that is only safe on a network you trust, like your own home or office.
+    <button class="btn-mini" id="open-net-settings">Open network settings</button>
+  </div>`;
+}
+
 function sectionNearby(): string {
   const rows: string[] = [];
   for (const p of state.peers.filter((x) => x.isBroadcast)) rows.push(bcastRow(p));
@@ -309,7 +332,7 @@ function sectionNearby(): string {
   const body = rows.length
     ? rows.join('')
     : `<div class="empty">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — check that over there first, then press ↻. Devices are looked for by name and by probing this network directly, so a device on the same network should appear even if its name does not.</div>`;
-  return `<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" aria-label="Scan for nearby devices again" title="Look for nearby devices now, checking every address on this network. The automatic check every ${state.scanInterval || 60}s is a lighter one. This does not update the app.">↻</button></div>${body}`;
+  return `${publicNetworkNotice()}<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" aria-label="Scan for nearby devices again" title="Look for nearby devices now, checking every address on this network. The automatic check every ${state.scanInterval || 60}s is a lighter one. This does not update the app.">↻</button></div>${body}`;
 }
 
 // Only rendered when something is waiting: an empty section would be a permanent
@@ -864,6 +887,9 @@ function wire() {
   root.querySelector('#canvas')?.addEventListener('click', pickFiles);
   root.querySelector('#share-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
   root.querySelector('#nearby-find')?.addEventListener('click', () => findNearby());
+  root.querySelector('#open-net-settings')?.addEventListener('click', async () => {
+    try { await backend().OpenNetworkSettings(); } catch (e) { toast(String(e)); }
+  });
   root.querySelector('#clip-add')?.addEventListener('click', addClipboard);
   root.querySelector('#primary-btn')?.addEventListener('click', onPrimary);
   root.querySelector('#bc-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
