@@ -113,6 +113,10 @@ const state = {
   incomingFolder: '' as string, // remembered destination; '' means ask each time
   pendingRemember: '' as string, // folder just used, offered as the default once
   shaiOpen: false as boolean, // the coming-soon panel behind the header launcher
+  // The device chosen to send to. Picking one SELECTS it rather than sending
+  // immediately, so the button can name it truthfully and there is a moment to
+  // notice you picked the wrong machine before the file leaves.
+  picked: null as { dest: string; name: string } | null,
   scanInterval: 60 as number,
   buildVersion: '' as string,
   // share modal
@@ -446,7 +450,7 @@ function destPicker(loggedIn: boolean): string {
     }
     ${
       state.peers.filter((p) => !p.isBroadcast).length
-        ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code">${escapeHtml(p.code)}</span>` : ''}<button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" title="Send" style="margin-left:4px">→</button></div>`).join('')
+        ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev${state.picked?.dest === p.dest ? ' picked' : ''}"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code">${escapeHtml(p.code)}</span>` : ''}<button class="ib${state.picked?.dest === p.dest ? ' on' : ''} pick-dev" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(p.name)}" title="${state.picked?.dest === p.dest ? 'Selected' : 'Select this device'}" style="margin-left:4px">${state.picked?.dest === p.dest ? '✓' : '→'}</button></div>`).join('')
         : `<div class="hint">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — turn that on over there, then press ↻ on Home. Or paste its code below.</div>`
     }
     <div class="or-line"><span>or a code</span></div>
@@ -679,12 +683,11 @@ function primaryLabel(): string {
   const files = `${n} file${n === 1 ? '' : 's'}`;
   if (state.dest === 'broadcast') return n ? `Broadcast ${files} to everyone nearby` : 'Start broadcast';
   if (state.dest === 'nearby') {
-    // Name the destination only when one has actually been chosen — a typed
-    // address or code. Guessing "the first device we happened to find" would put
-    // a name on the button that the user never picked, which is worse than
-    // saying less. Choosing a device from the list sends immediately, so there
-    // is no selected-but-unsent state to describe.
-    return n ? (state.netDest ? `Send ${files} to ${state.netDest}` : `Send ${files}`) : 'Send';
+    // Only ever names a device the user actually selected. A typed address counts
+    // as a choice too; what it will not do is name whichever device happened to
+    // answer the scan first.
+    const target = state.picked?.name || state.netDest.trim();
+    return n && target ? `Send ${files} to ${target}` : `Send ${files}`;
   }
   return n ? `Create link for ${files}` : 'Create link';
 }
@@ -692,18 +695,22 @@ function primaryLabel(): string {
 function canPrimary(): boolean {
   if (!state.paths.length) return false;
   if (state.dest === 'public' || state.dest === 'private') return !!state.status?.loggedIn;
+  // A direct send needs a destination. The button stays present and disabled
+  // rather than appearing once one is chosen, so nothing reflows.
+  if (state.dest === 'nearby') return !!(state.picked || state.netDest.trim());
   return true;
 }
 function footerReason(): string {
   if (!state.paths.length) return 'Add a file above to share.';
   if ((state.dest === 'public' || state.dest === 'private') && !state.status?.loggedIn) return 'Login to share to the cloud.';
-  if (state.dest === 'nearby') return 'Pick a device above, or enter a code and press Send.';
+  if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter a code.';
   return '';
 }
 async function onPrimary() {
   if (state.dest === 'broadcast') return startBroadcast();
   if (state.dest === 'nearby') {
-    const dest = (root.querySelector<HTMLInputElement>('#net-dest')?.value || '').trim();
+    const typed = (root.querySelector<HTMLInputElement>('#net-dest')?.value || '').trim();
+    const dest = typed || state.picked?.dest || '';
     if (!dest) { root.querySelector<HTMLInputElement>('#net-dest')?.focus(); return; }
     return sendTo(dest);
   }
@@ -715,6 +722,7 @@ async function sendTo(dest: string) {
   const ok = outcomes.every((o) => o.ok);
   state.view = 'home';
   state.paths = [];
+  state.picked = null;
   await refreshActivity();
   render();
   if (!ok) toast(outcomes.find((o) => !o.ok)?.error || 'Send failed');
@@ -792,9 +800,16 @@ async function findNearby(quiet = false) {
   state.browsing = true; if (!quiet) render();
   try { state.peers = (await backend().LanBrowse()) || []; } catch { /* keep last list */ }
   state.browsing = false;
-  // Only repaint the feed when we're actually looking at it, so a background
-  // scan never yanks an open modal out from under the user.
-  if (state.view === 'home') render();
+  // Repaint where the result is actually on screen. Home always; the share modal
+  // too when its device list is showing, because that list arrives AFTER the
+  // modal does when the app is opened straight into Share from the file manager
+  // — without this the user is asked to pick a device from an empty list.
+  //
+  // Never while the address box has focus: a repaint mid-keystroke would take the
+  // caret away, which is exactly the "yanked out from under you" this guard was
+  // written to prevent.
+  const typing = root.querySelector('#net-dest') === document.activeElement;
+  if (state.view === 'home' || (state.view === 'share' && state.dest === 'nearby' && !typing)) render();
 }
 
 // startScanTimer re-scans for nearby devices/broadcasts every scanInterval
@@ -832,10 +847,21 @@ function wire() {
   root.querySelectorAll('#bc-stop').forEach((b) => b.addEventListener('click', stopBroadcast));
   root.querySelector('#live-row')?.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest('#bc-stop')) { state.view = 'broadcast'; render(); } });
   on('.chip-x', 'click', (e) => { state.paths.splice(Number((e.currentTarget as HTMLElement).dataset.i), 1); render(); });
+  // Picking a device selects it; the send happens from the primary button. The
+  // old behaviour fired the transfer straight from this row, which left no
+  // moment to notice you had picked the wrong machine.
+  root.querySelectorAll<HTMLElement>('.pick-dev').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const dest = el.dataset.dest || '';
+      state.picked = state.picked?.dest === dest ? null : { dest, name: el.dataset.name || dest };
+      render();
+    }),
+  );
   on('.send-to', 'click', (e) => sendTo((e.currentTarget as HTMLElement).dataset.dest || ''));
   on('.dl-btn', 'click', (e) => { const fp = (e.currentTarget as HTMLElement).dataset.fp; const p = state.peers.find((x) => x.isBroadcast && x.fingerprint === fp); if (p) { state.dl = p; render(); } });
   on('.dest-opt', 'click', (e) => { state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest; render(); });
-  on('.dest-opt input, .dest-opt .send-to, .dest-opt .mode', 'click', (e) => e.stopPropagation());
+  on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .mode', 'click', (e) => e.stopPropagation());
   on('.mode', 'click', (e) => { state.bcAccess = (e.currentTarget as HTMLElement).dataset.bcMode as any; render(); });
   const nd = root.querySelector<HTMLInputElement>('#net-dest');
   nd?.addEventListener('input', () => (state.netDest = nd.value));

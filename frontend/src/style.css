@@ -1693,3 +1693,12 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
     scroll-behavior: auto !important;
   }
 }
+
+/* The chosen device, so the selection is visible in the list as well as on the
+   button. */
+.mini-dev.picked {
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+  padding: 2px var(--s3);
+}
