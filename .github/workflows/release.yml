@@ -25,9 +25,9 @@ name: release
 # workflow_dispatch with an empty [Unreleased] still FAILS, because a person
 # asked to ship and there is nothing to tell anyone.
 #
-# NOTE: rolling [Unreleased] under its version heading after a release is still
-# MANUAL, and skipping it is why the six releases of 2026-09-07 republished each
-# other's notes. Automating that roll is todo §YY/1.
+# Rolling [Unreleased] under its version heading is AUTOMATIC after a stable
+# release from a push (see the publish job). It used to be manual, and being
+# manual is why the six releases of 2026-09-07 republished each other's notes.
 #
 # workflow_dispatch stays for BETA: a push carries no channel choice.
 on:
@@ -354,3 +354,48 @@ jobs:
             --title "Share2Us GUI ${VERSION}" \
             --notes-file "$NOTES_FILE" \
             $LATEST_FLAGS
+
+          # Roll [Unreleased] under the version that just shipped.
+          #
+          # This was a manual step, and it failed exactly when it mattered: the
+          # six releases of 2026-09-07 republished each other's notes, and so did
+          # two more the next day — someone reading them is told about fixes they
+          # already have. A step that must be remembered after every release, in
+          # the middle of shipping, is a step that will be skipped.
+          #
+          # Only for a stable release from a push: a beta's notes are generated,
+          # and a hand-run release should not rewrite the file under the operator.
+          # CHANGELOG.md is not a release trigger path, so this commit cannot
+          # start another run.
+          if [ "${{ inputs.channel || 'stable' }}" = stable ] && [ "${{ github.event_name }}" = push ]; then
+            python3 - "$VERSION" <<'ROLL'
+          import datetime, re, sys
+          version = sys.argv[1]
+          text = open('CHANGELOG.md').read()
+          marker = '## [Unreleased]'
+          start = text.index(marker) + len(marker)
+          nxt = text.find('\n## [', start)
+          body = text[start:nxt if nxt != -1 else len(text)]
+          # Comments are guidance, not release notes.
+          content = re.sub(r'<!--.*?-->', '', body, flags=re.S).strip()
+          if content:
+              today = datetime.date.today().isoformat()
+              kept = re.findall(r'<!--.*?-->', body, flags=re.S)
+              header = marker + '\n\n' + ('\n'.join(kept) + '\n\n' if kept else '')
+              rolled = f'## [{version}] - {today}\n\n{content}\n'
+              text = text[:text.index(marker)] + header + rolled + text[nxt if nxt != -1 else len(text):]
+              open('CHANGELOG.md', 'w').write(text)
+              print(f'rolled [Unreleased] under {version}')
+          else:
+              print('[Unreleased] was empty; nothing to roll')
+          ROLL
+            if ! git diff --quiet CHANGELOG.md; then
+              git config user.name  "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add CHANGELOG.md
+              git commit -m "docs(changelog): roll [Unreleased] under ${VERSION}"
+              # Never clobber a merge that landed while this ran.
+              git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+              git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::could not push the changelog roll; do it by hand"
+            fi
+          fi
