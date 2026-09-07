@@ -4,3 +4,6 @@ frontend/dist/*
 !frontend/dist/.gitkeep
 go.work
 go.work.sum
+
+# wails build writes this next to the frontend package.json
+frontend/package.json.md5
