@@ -1604,3 +1604,10 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
   background: var(--warning);
   border: 1.5px solid var(--bg-1);
 }
+
+/* Section headers on Home. Each answers one question, so they are separated
+   rather than merged into a single feed the way "Activity & nearby" was. */
+.sec-head + .sec-head,
+.item + .sec-head,
+.empty + .sec-head { margin-top: var(--s6); }
+.sec-head .meta { font-weight: 400; color: var(--text-3); font-size: var(--fs-xs); }

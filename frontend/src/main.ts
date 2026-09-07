@@ -23,6 +23,10 @@ type ShareRequest = {
 };
 type ShareOutcome = { path: string; ok: boolean; link?: string; error?: string };
 type LoginInfo = { userCode: string; verificationUrl: string; verificationUri: string };
+// A file that has arrived and is waiting in staging until the user says where it
+// goes. Deliberately not written to a default folder behind their back.
+type Incoming = { id: string; name: string; size: number; from: string; at: string };
+
 type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string; channel: string; prerelease: boolean };
 type LanPeer = {
   name: string; addr: string; dest: string; code: string; mode: string;
@@ -99,6 +103,7 @@ const state = {
   storeManaged: false as boolean, // Microsoft Store build/install -> updater hidden
   updateChannel: 'stable' as string, // 'stable' | 'beta'; shared with the CLI via config.json
 
+  incoming: [] as Incoming[], // staged arrivals awaiting a save location (phase 5)
   scanInterval: 60 as number,
   buildVersion: '' as string,
   // share modal
@@ -224,8 +229,7 @@ function renderHome(): void {
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
-      <div class="sec-head"><b>Activity &amp; nearby</b><button class="refresh" id="nearby-find" title="Refresh (auto every ${state.scanInterval || 60}s)">↻</button></div>
-      <div class="feed-scroll">${feed()}</div>
+      <div class="feed-scroll">${sectionNearby()}${sectionIncoming()}${sectionRecent()}</div>
       ${settingsBlock()}
     </div>
     ${state.requests.length ? requestOverlay(state.requests[0]) : ''}
@@ -238,23 +242,48 @@ function renderHome(): void {
   wire();
 }
 
-function feed(): string {
+// Home is three separate questions, not one list: who can I reach, what has
+// arrived that I have not filed, and what happened lately. They used to share a
+// single "Activity & nearby" feed, which answered none of them well.
+function sectionNearby(): string {
   const rows: string[] = [];
-  // Incoming approval prompts that aren't shown as an overlay yet still queue;
-  // the head is the overlay. Broadcasts + your live broadcast + log below.
-  for (const p of state.peers.filter((x) => x.isBroadcast)) {
-    rows.push(bcastRow(p));
-  }
+  for (const p of state.peers.filter((x) => x.isBroadcast)) rows.push(bcastRow(p));
   if (state.bc && state.bc.active) rows.push(liveRow(state.bc));
-  for (const p of state.peers.filter((x) => !x.isBroadcast)) {
-    rows.push(nearbyRow(p));
-  }
-  for (const a of state.activity) rows.push(logRow(a));
-  if (!rows.length) {
-    return `<div class="empty">Nothing yet. Press ↻ to scan — a nearby device shows up only while Share2Us is open on it with “Discoverable on local network” turned on.</div>`;
-  }
-  return rows.join('');
+  for (const p of state.peers.filter((x) => !x.isBroadcast)) rows.push(nearbyRow(p));
+  const body = rows.length
+    ? rows.join('')
+    : `<div class="empty">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on. Press ↻ to scan again.</div>`;
+  return `<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" title="Refresh (auto every ${state.scanInterval || 60}s)">↻</button></div>${body}`;
 }
+
+// Only rendered when something is waiting: an empty section would be a permanent
+// reminder of nothing.
+function sectionIncoming(): string {
+  if (!state.incoming.length) return '';
+  const rows = state.incoming
+    .map(
+      (f) => `<div class="item">
+      <div class="ico">📥</div>
+      <div class="line"><b>${escapeHtml(f.name)}</b> <span class="meta">· ${fmtBytes(f.size)} · from ${escapeHtml(f.from)}</span></div>
+      <div class="acts"><button class="ib save-incoming" data-id="${escapeHtml(f.id)}" title="Save to this device">⤓</button></div>
+    </div>`,
+    )
+    .join('');
+  return `<div class="sec-head"><b>Incoming</b><span class="meta">waiting to be saved</span></div>${rows}`;
+}
+
+// Capped at five. The full history lives in the portal rather than being rebuilt
+// here, so this stays a glance and not a second product.
+function sectionRecent(): string {
+  const all = state.activity;
+  if (!all.length) return '';
+  const rows = all.slice(0, 5).map(logRow).join('');
+  const more = all.length > 5
+    ? `<div class="item log"><div class="line"><button class="strip-link" id="open-history">Show all in the portal ↗</button></div></div>`
+    : '';
+  return `<div class="sec-head"><b>Recent</b></div>${rows}${more}`;
+}
+
 
 function bcastRow(p: LanPeer): string {
   return `<div class="item warn">
@@ -754,6 +783,11 @@ function wire() {
     } catch (e) { toast(String(e)); }
   });
   // Settings is one click from the strip now, wherever the user is looking.
+  // Full history is the portal's job; this window shows the last few.
+  on('#open-history', 'click', () => {
+    const rt = (window as any).runtime;
+    rt?.BrowserOpenURL?.('https://portal.share2.us/activity');
+  });
   on('#open-settings', 'click', () => {
     const d = root.querySelector<HTMLDetailsElement>('details.settings');
     if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
