@@ -126,7 +126,9 @@ const state = {
   incoming: [] as Incoming[], // staged arrivals awaiting a save location
   incomingFolder: '' as string, // remembered destination; '' means ask each time
   pendingRemember: '' as string, // folder just used, offered as the default once
-  shaiOpen: false as boolean, // the coming-soon panel behind the header launcher
+  shaiOpen: false as boolean,
+  updateOpen: false as boolean,
+  updateChecking: false as boolean, // the update panel; the dot is the notification // the coming-soon panel behind the header launcher
   // The device chosen to send to. Picking one SELECTS it rather than sending
   // immediately, so the button can name it truthfully and there is a moment to
   // notice you picked the wrong machine before the file leaves.
@@ -299,7 +301,7 @@ function buildStrip(): string {
 function renderHome(): void {
   root.innerHTML = `<div class="modal">
     ${header()}
-    ${updateBanner()}
+    ${updatePanel()}
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
@@ -453,8 +455,8 @@ function renderShare(): void {
   const s = state.status!;
   root.innerHTML = `<div class="modal">
     <header class="modal-head">
-      <div class="brand"><button class="btn-mini" id="share-back">←</button> Share</div>
-      <div class="head-actions"><span class="who" style="color:var(--muted)">${state.paths.length} file${state.paths.length === 1 ? '' : 's'}</span></div>
+      <div class="brand"><button class="btn-mini" id="share-back" aria-label="Back" title="Back">←</button> Share</div>
+      <div class="head-actions"><span class="who">${state.paths.length} file${state.paths.length === 1 ? '' : 's'}</span></div>
     </header>
     ${loginProgress()}
     <div class="modal-body" style="padding:14px 18px 24px">
@@ -463,7 +465,7 @@ function renderShare(): void {
       <div class="dest">${destPicker(s.loggedIn)}</div>
     </div>
     <footer class="modal-foot">
-      ${footerReason() ? `<div class="foot-reason">${escapeHtml(footerReason())}</div>` : ''}
+      <div class="foot-reason">${escapeHtml(footerReason())}</div>
       <button class="btn-primary" id="primary-btn" ${canPrimary() ? '' : 'disabled'}>${escapeHtml(primaryLabel())}</button>
     </footer>
     ${shaiPanel()}
@@ -484,7 +486,8 @@ function sendModeTabs(): string {
 
 function destPicker(loggedIn: boolean): string {
   const opt = (d: Dest, title: string, badge: string, body = '') => `
-    <div class="dest-opt ${state.dest === d ? 'sel' : ''}" data-dest-opt="${d}">
+    <div class="dest-opt ${state.dest === d ? 'sel' : ''}" data-dest-opt="${d}"
+         role="radio" tabindex="0" aria-checked="${state.dest === d ? 'true' : 'false'}">
       <div class="dest-top"><span class="dot"></span>${title}${badge}</div>
       ${state.dest === d && body ? `<div class="dest-body">${body}</div>` : ''}
     </div>`;
@@ -552,7 +555,8 @@ function destPicker(loggedIn: boolean): string {
 
 
 function bcMode(m: string, label: string, sub: string): string {
-  return `<div class="mode ${state.bcAccess === m ? 'on' : ''}" data-bc-mode="${m}"><span class="r"></span>${label} <small>— ${sub}</small></div>`;
+  return `<div class="mode ${state.bcAccess === m ? 'on' : ''}" data-bc-mode="${m}"
+    role="radio" tabindex="0" aria-checked="${state.bcAccess === m ? 'true' : 'false'}"><span class="r"></span>${label} <small>— ${sub}</small></div>`;
 }
 
 // ---- Broadcast detail ------------------------------------------------------
@@ -567,7 +571,7 @@ function renderBroadcast(): void {
   const sent = completed.reduce((n, c) => n + c.total, 0) + downloading.reduce((n, c) => n + c.sent, 0);
   root.innerHTML = `<div class="modal">
     <header class="modal-head">
-      <div class="brand"><button class="btn-mini" id="bc-back">←</button> Broadcast</div>
+      <div class="brand"><button class="btn-mini" id="bc-back" aria-label="Back" title="Back">←</button> Broadcast</div>
       <div class="head-actions"><span class="tag live">live</span><button class="ib" id="bc-stop" title="Stop broadcasting" style="margin-left:8px">◼</button></div>
     </header>
     <div class="modal-body" style="padding:14px 18px 24px">
@@ -631,12 +635,36 @@ function downloadOverlay(p: LanPeer & { trust?: boolean }): string {
 
 // ---- Shared bits -----------------------------------------------------------
 
-function updateBanner(): string {
-  if (state.storeManaged) return '';
+// An update is announced by the dot on the header icon, and acted on in this
+// panel. It used to be a bar inserted between the header and the body, which
+// pushed the entire app down the moment the check came back — the layout shift
+// the dot was introduced to avoid, left in place beside it, so the app both
+// announced an update twice and moved under the reader.
+//
+// The panel is positioned, like Shai's, so opening it displaces nothing.
+function updatePanel(): string {
+  if (!state.updateOpen || state.storeManaged) return '';
   const u = state.update;
-  if (!u?.available) return '';
-  const kind = u.prerelease ? 'Beta update available' : 'Update available';
-  return `<div class="update-bar"><span>${kind} — <strong>v${escapeHtml(u.latest)}</strong></span><button class="btn-mini" id="apply-update">Install</button></div>`;
+  const kind = u?.prerelease ? 'Beta update' : 'Update';
+  const body = state.updateChecking
+    ? `<div class="upd-body">Checking for updates…</div>
+       <div class="upd-actions"><button class="btn-mini" id="upd-later">Close</button></div>`
+    : u?.available
+    ? `<div class="upd-body">
+         <b>${escapeHtml(kind)} v${escapeHtml(u.latest)}</b> is ready to install.
+         <div class="upd-cur">You have v${escapeHtml(u.current || state.buildVersion)}.</div>
+       </div>
+       <div class="upd-actions">
+         <button class="btn-mini" id="upd-later">Later</button>
+         <button class="btn-accept" id="apply-update">Install</button>
+       </div>`
+    : `<div class="upd-body">You are up to date.<div class="upd-cur">v${escapeHtml(state.buildVersion)}</div></div>
+       <div class="upd-actions"><button class="btn-mini" id="upd-later">Close</button></div>`;
+  return `<div class="shai-panel upd-panel" id="upd-panel">
+    <div class="shai-head"><b>Software update</b>
+      <button class="ib" id="upd-close" title="Close" style="margin-left:auto">✕</button></div>
+    ${body}
+  </div>`;
 }
 // ADR-034: the second factor. The transfer has already been answered; this only
 // decides whether the device becomes trusted.
@@ -704,12 +732,20 @@ function filesBlock(): string {
   }
   return `<div class="files">${state.paths.map((p, i) => `<div class="file-chip" title="${escapeHtml(p)}">${escapeHtml(basename(p))}<button class="chip-x" data-i="${i}" title="Remove">×</button></div>`).join('')}<button class="files-add" id="pick-files">＋ Add files</button></div>`;
 }
+// The slot is always drawn, because checkClipboard() runs on every window focus:
+// without it, alt-tabbing back with an image copied inserted a chip and pushed
+// the canvas around under the pointer.
 function clipChip(): string {
   const c = state.clip;
-  if (!c || c.kind === 'none') return '';
-  const label = c.kind === 'image' ? '🖼 Share clipboard image' : '📄 Share copied text';
-  const prev = c.kind === 'text' && c.preview ? `<div class="clip-prev">${escapeHtml(c.preview)}</div>` : '';
-  return `<div class="clip-suggest"><button class="clip-chip" id="clip-add">${label}</button>${prev}</div>`;
+  const inner =
+    !c || c.kind === 'none'
+      ? ''
+      : (() => {
+          const label = c.kind === 'image' ? '🖼 Share clipboard image' : '📄 Share copied text';
+          const prev = c.kind === 'text' && c.preview ? `<div class="clip-prev">${escapeHtml(c.preview)}</div>` : '';
+          return `<button class="clip-chip" id="clip-add">${label}</button>${prev}`;
+        })();
+  return `<div class="clip-suggest">${inner}</div>`;
 }
 function noteRow(): string { return `<label class="fld">Note <span class="hint">shown to viewers, optional</span><input id="note" type="text" maxlength="500" placeholder="e.g. Q3 report — sign by Friday" /></label>`; }
 function expiryRow(): string { return `<label class="fld">Expires<select id="expires"><option value="">Default</option><option value="1h">1 hour</option><option value="1d">1 day</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="keep">Keep (no expiry)</option></select></label>`; }
@@ -934,7 +970,12 @@ async function addClipboard() { const c = state.clip; if (!c) return; try { addP
 function wire() {
   const on = (sel: string, ev: string, fn: (e: Event) => void) => root.querySelectorAll(sel).forEach((el) => el.addEventListener(ev, fn));
   root.querySelector('#theme-toggle')?.addEventListener('click', toggleTheme);
-  root.querySelector('#check-update')?.addEventListener('click', manualUpdateCheck);
+  root.querySelector('#check-update')?.addEventListener('click', () => {
+    state.updateOpen = !state.updateOpen;
+    render();
+    if (state.updateOpen && !state.update?.available) manualUpdateCheck();
+  });
+  on('#upd-close, #upd-later', 'click', () => { state.updateOpen = false; render(); });
   root.querySelector('#login-btn')?.addEventListener('click', signIn);
   root.querySelector('#reopen-login')?.addEventListener('click', () => backend().BeginLogin());
   root.querySelector('#logout-btn')?.addEventListener('click', logout);
@@ -987,6 +1028,14 @@ function wire() {
   });
   on('.dl-btn', 'click', (e) => { const fp = (e.currentTarget as HTMLElement).dataset.fp; const p = state.peers.find((x) => x.isBroadcast && x.fingerprint === fp); if (p) { state.dl = p; render(); } });
   on('.dest-opt', 'click', (e) => { state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest; render(); });
+  // A div with a click handler is invisible to the keyboard. These are radios in
+  // everything but markup, so they answer to Enter and Space like one.
+  on('.dest-opt, .mode', 'keydown', (e) => {
+    const k = (e as KeyboardEvent).key;
+    if (k !== 'Enter' && k !== ' ') return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
   on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .mode, .dest-opt .addr-row', 'click', (e) => e.stopPropagation());
   on('.mode', 'click', (e) => { state.bcAccess = (e.currentTarget as HTMLElement).dataset.bcMode as any; render(); });
   const rc = root.querySelector<HTMLInputElement>('#recipients');
@@ -1170,13 +1219,19 @@ async function applyUpdate(e: Event) {
   const btn = e.currentTarget as HTMLButtonElement; btn.disabled = true; btn.textContent = 'Updating…';
   try { await backend().ApplyUpdate(); } catch { btn.disabled = false; btn.textContent = 'Install'; }
 }
-async function manualUpdateCheck(e: Event) {
-  const btn = e.currentTarget as HTMLButtonElement; btn.disabled = true; const prev = btn.textContent; btn.textContent = '…';
+// Drives state rather than rewriting the button's own label, which fought with
+// every render that came after it. The panel says what is happening.
+async function manualUpdateCheck() {
+  state.updateChecking = true;
+  render();
   try {
     const info = await backend().CheckUpdate();
-    if (info?.available) { state.update = info; render(); return; }
-    btn.textContent = '✓'; setTimeout(() => { btn.textContent = prev; btn.disabled = false; }, 1500);
-  } catch { btn.textContent = prev; btn.disabled = false; }
+    state.update = info?.available ? info : null;
+  } catch {
+    /* offline is not an error worth a dialog; the panel just says up to date */
+  }
+  state.updateChecking = false;
+  render();
 }
 
 // ---- Events + input --------------------------------------------------------

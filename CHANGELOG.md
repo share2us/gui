@@ -16,6 +16,25 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+### Fixed
+- **The keyboard can reach everything again.** Choosing where a file goes was
+  drawn as plain boxes with no keyboard behaviour at all, so that choice could
+  only be made with a mouse. The destination cards and the broadcast access modes
+  are now focusable and answer to Enter and Space.
+- **Text boxes and dropdowns show a focus outline.** A style rule was cancelling
+  it on every one of them, so tabbing through the window gave no clue where you
+  were. Checked across every stop in the tab order.
+- **An update no longer announces itself twice, or moves the window while you are
+  reading it.** The bar that pushed the whole app down when a check came back is
+  gone; the dot on the update icon says one is ready, and clicking it opens a
+  panel with the version and Install.
+- **The line under the main button no longer resizes the window** as files are
+  added or a device is chosen, and the clipboard suggestion no longer nudges the
+  drop area every time you switch back to the app.
+- **Warning messages follow the light theme.** Their colours were fixed to the
+  dark palette, so in light mode they came out wrong.
+- Two back buttons and the file-count now say what they are to a screen reader.
+
 ## [20260907192031] - 2026-09-08
 
 ### Fixed
