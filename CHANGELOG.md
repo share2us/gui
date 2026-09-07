@@ -17,6 +17,33 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Fixed
+- **A received file no longer overwrites one already in your folder.** With a save
+  folder remembered, an arrival with a name already there was written straight
+  over it — the earlier file was gone, with no prompt and no record. It now lands
+  as "report (1).pdf".
+- **Two files with the same name can both arrive.** While one was waiting to be
+  saved, a second copy of the same name failed the whole transfer and told the
+  sender to re-run with a command-line flag this app does not have.
+- **Files saved to your remembered folder still appear under Incoming**, so a
+  single file can be sent somewhere else without changing the setting and back.
+  Nothing there is ever deleted: a file already saved simply stops being listed.
+- **"Only these people" now asks who.** Choosing it gave you the same options as a
+  public link, and the share was created with an empty recipient list — the
+  restriction could not be set at all.
+- **Broadcast no longer claims more files than it sends.** The button offered to
+  broadcast every selected file and sent only the first. Broadcast handles one
+  file at a time and now says so.
+- **Settings can be closed again.** The link at the bottom only ever opened it.
+- **An incoming file can be saved by clicking its row**, not only the small icon.
+
+### Added
+- **Links to share2.us and the source code** beside the version at the bottom of
+  the window. Share2Us is free software (GPL-3.0-only); the matching
+  `s2u version` change prints both.
+
+## [20260907172915] - 2026-09-07
+
+### Fixed
 - **Windows Firewall no longer blocks sharing on a "Public" network.** The
   installer's firewall rule only covered Private and Domain networks, and Windows
   classifies plenty of ordinary home networks as Public — including behind an

@@ -25,7 +25,7 @@ type ShareOutcome = { path: string; ok: boolean; link?: string; error?: string }
 type LoginInfo = { userCode: string; verificationUrl: string; verificationUri: string };
 // A file that has arrived and is waiting in staging until the user says where it
 // goes. Deliberately not written to a default folder behind their back.
-type Incoming = { id: string; name: string; size: number; from: string; at: string; file: string };
+type Incoming = { id: string; name: string; size: number; from: string; at: string; file: string; filed?: boolean; savedTo?: string };
 
 type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string; channel: string; prerelease: boolean };
 type NetProfile = { category: number; name: string; supported: boolean };
@@ -141,6 +141,7 @@ const state = {
   bcAccess: 'approve' as 'all' | 'trusted' | 'approve',
   optionsOpen: false as boolean,
   netDest: '' as string,
+  recipients: '' as string, // typed into the private-link path; survives a repaint
   // login
   loginPhase: 'idle' as 'idle' | 'waiting' | 'error',
   loginInfo: null as LoginInfo | null,
@@ -279,11 +280,20 @@ function shaiPanel(): string {
 // arrives, so it can never appear late and reflow the frame (design rule: no
 // layout shift). Click copies it, because the point of showing it is to be able
 // to quote it in a bug report.
+// The version line is always rendered, so hanging the project links off it costs
+// no layout shift — unlike giving them a block of their own. Share2Us is
+// GPL-3.0-only; a copyleft binary should say where its source lives.
 function buildStrip(): string {
   const v = state.buildVersion;
-  return `<div class="build-strip" id="build-strip" title="${v ? 'Click to copy' : ''}">${
-    v ? `version <span class="build-ver">${escapeHtml(v)}</span>` : '&nbsp;'
-  }</div>`;
+  return `<div class="build-strip">
+    <span id="build-strip" class="build-ver-wrap" title="${v ? 'Click to copy' : ''}">${
+      v ? `version <span class="build-ver">${escapeHtml(v)}</span>` : '&nbsp;'
+    }</span>
+    <span class="build-links">
+      <button class="strip-link ext-link" data-href="https://share2.us" title="share2.us">share2.us</button>
+      <button class="strip-link ext-link" data-href="https://github.com/share2us" title="Source code on GitHub (GPL-3.0-only)">source</button>
+    </span>
+  </div>`;
 }
 
 function renderHome(): void {
@@ -350,15 +360,22 @@ function sectionIncoming(): string {
     return remember ? `<div class="sec-head"><b>Incoming</b></div>${remember}` : '';
   }
   const rows = state.incoming
-    .map(
-      (f) => `<div class="item">
-      <div class="ico">📥</div>
-      <div class="line"><b>${escapeHtml(f.name)}</b> <span class="meta">· ${fmtBytes(f.size)} · from ${escapeHtml(f.from)}</span></div>
-      <div class="acts"><button class="ib save-incoming" data-id="${escapeHtml(f.id)}" title="Save to this device">⤓</button></div>
-    </div>`,
-    )
+    .map((f) => {
+      // A filed arrival is already on disk where the user asked. It is listed so a
+      // one-off can still go elsewhere, so it must not claim to be waiting.
+      const where = f.filed
+        ? ` · saved to ${escapeHtml(f.savedTo || 'your folder')}`
+        : ` · from ${escapeHtml(f.from)}`;
+      const act = f.filed ? 'Save another copy somewhere else' : 'Save to this device';
+      return `<div class="item inc-row" data-id="${escapeHtml(f.id)}" title="${act}">
+      <div class="ico">${f.filed ? '✓' : '📥'}</div>
+      <div class="line"><b>${escapeHtml(f.name)}</b> <span class="meta">· ${fmtBytes(f.size)}${where}</span></div>
+      <div class="acts"><button class="ib save-incoming" data-id="${escapeHtml(f.id)}" title="${act}">⤓</button></div>
+    </div>`;
+    })
     .join('');
-  return `<div class="sec-head"><b>Incoming</b><span class="meta">waiting to be saved</span></div>${rows}${remember}`;
+  const anyWaiting = state.incoming.some((f) => !f.filed);
+  return `<div class="sec-head"><b>Incoming</b><span class="meta">${anyWaiting ? 'waiting to be saved' : 'recently received'}</span></div>${rows}${remember}`;
 }
 
 // Capped at five. The full history lives in the portal rather than being rebuilt
@@ -511,14 +528,25 @@ function destPicker(loggedIn: boolean): string {
   }
   // Link options (expiry, password, one-time, note) only mean something here, so
   // they live on this path instead of sitting under every destination.
-  const linkBody = `
+  const options = `
     <details class="opt-card"${state.optionsOpen ? ' open' : ''} style="margin-top:9px">
       <summary class="opt-summary">＋ Options<span class="opt-hint">note, expiry, password</span></summary>
       <div class="opt-body">${noteRow()}${expiryRow()}${checkRow('one-time', 'One-time (delete after first download)')}${passwordRow()}</div>
     </details>`;
+  // "Only these people" had NO input behind it: the submit handler read
+  // #recipients, and nothing ever rendered it, so the restricted link was always
+  // created with an empty recipient list. The two options are no longer identical.
+  const recipientsRow = `
+    <div class="rcpt-row">
+      <input id="recipients" type="text" spellcheck="false" autocapitalize="off"
+             placeholder="name@example.com, someone@else.com"
+             title="Email addresses, separated by commas. Only these people can open the link, and each has to sign in with that address."
+             value="${escapeHtml(state.recipients)}" />
+      <div class="rcpt-hint">Comma-separated. Each person signs in with that address to open it.</div>
+    </div>`;
   return (
-    opt('public', 'Anyone with the link', loggedIn ? '' : need, linkBody) +
-    opt('private', 'Only these people', loggedIn ? '' : need, linkBody)
+    opt('public', 'Anyone with the link', loggedIn ? '' : need, options) +
+    opt('private', 'Only these people', loggedIn ? '' : need, recipientsRow + options)
   );
 }
 
@@ -721,7 +749,12 @@ function trustedBlock(): string {
 function primaryLabel(): string {
   const n = state.paths.length;
   const files = `${n} file${n === 1 ? '' : 's'}`;
-  if (state.dest === 'broadcast') return n ? `Broadcast ${files} to everyone nearby` : 'Start broadcast';
+  // Never name a count broadcast cannot honour: the protocol advertises one file
+  // (a folder is refused outright), and this used to promise N and send the first.
+  if (state.dest === 'broadcast') {
+    if (!n) return 'Start broadcast';
+    return n === 1 ? 'Broadcast 1 file to everyone nearby' : `Broadcast ${files}`;
+  }
   if (state.dest === 'nearby') {
     // Only ever names a device the user actually selected. A typed address counts
     // as a choice too; what it will not do is name whichever device happened to
@@ -732,18 +765,24 @@ function primaryLabel(): string {
   return n ? `Create link for ${files}` : 'Create link';
 }
 
+// Derived from footerReason so the two can never disagree. They did: the reason
+// line said broadcast sends one file at a time while the button next to it stayed
+// enabled, because each maintained its own copy of the rules. The button stays
+// present and disabled rather than appearing once a destination is chosen, so
+// nothing reflows.
 function canPrimary(): boolean {
-  if (!state.paths.length) return false;
-  if (state.dest === 'public' || state.dest === 'private') return !!state.status?.loggedIn;
-  // A direct send needs a destination. The button stays present and disabled
-  // rather than appearing once one is chosen, so nothing reflows.
-  if (state.dest === 'nearby') return !!(state.picked || state.netDest.trim());
-  return true;
+  return footerReason() === '';
 }
 function footerReason(): string {
   if (!state.paths.length) return 'Add a file above to share.';
   if ((state.dest === 'public' || state.dest === 'private') && !state.status?.loggedIn) return 'Login to share to the cloud.';
   if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter its address.';
+  // Broadcast offers ONE file for others to pull. Silently sending only the first
+  // of several is the fault this replaces; say so and point at the path that does
+  // handle several.
+  if (state.dest === 'broadcast' && state.paths.length > 1)
+    return 'Broadcast sends one file at a time. Remove the others, or send them to a device instead.';
+  if (state.dest === 'private' && !state.recipients.trim()) return 'Add at least one email address above.';
   return '';
 }
 async function onPrimary() {
@@ -792,7 +831,7 @@ async function doShare() {
   req.password = val('password') || undefined;
   req.oneTime = checked('one-time');
   req.note = val('note') || undefined;
-  if (state.dest === 'private') req.recipients = val('recipients').split(',').map((x) => x.trim()).filter(Boolean);
+  if (state.dest === 'private') req.recipients = state.recipients.split(',').map((x) => x.trim()).filter(Boolean);
   const kind = state.dest;
   const name = basename(state.paths[0] || '');
   const btn = root.querySelector<HTMLButtonElement>('#primary-btn')!;
@@ -832,6 +871,24 @@ async function stopBroadcast() {
 }
 
 // ---- Data refresh ----------------------------------------------------------
+
+// Save a waiting arrival. The native dialog cannot carry a "remember this"
+// checkbox, so the offer comes after the save, once, and only while no folder is
+// set — asking every time would be nagging.
+async function saveIncoming(id: string) {
+  if (!id) return;
+  try {
+    const folder = await backend().SaveIncoming(id);
+    if (!folder) return; // cancelled: the file is still waiting
+    await refreshIncoming();
+    if (!state.incomingFolder) {
+      state.pendingRemember = folder;
+    } else {
+      toast('Saved');
+    }
+    render();
+  } catch (e) { toast(String(e)); }
+}
 
 async function refreshIncoming() { try { state.incoming = (await backend().IncomingList()) || []; } catch { /* */ } }
 async function refreshActivity() { try { state.activity = (await backend().ActivityLog()) || []; } catch { /* */ } }
@@ -932,6 +989,8 @@ function wire() {
   on('.dest-opt', 'click', (e) => { state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest; render(); });
   on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .mode, .dest-opt .addr-row', 'click', (e) => e.stopPropagation());
   on('.mode', 'click', (e) => { state.bcAccess = (e.currentTarget as HTMLElement).dataset.bcMode as any; render(); });
+  const rc = root.querySelector<HTMLInputElement>('#recipients');
+  rc?.addEventListener('input', () => (state.recipients = rc.value));
   const nd = root.querySelector<HTMLInputElement>('#net-dest');
   const ndUse = root.querySelector<HTMLButtonElement>('#net-dest-use');
   // Enable the action in place rather than re-rendering: a render on every
@@ -1000,24 +1059,15 @@ function wire() {
       render();
     }),
   );
-  // Save a waiting arrival. The native dialog cannot carry a "remember this"
-  // checkbox, so the offer comes after the save, once, and only while no folder
-  // is set — asking again every time would be nagging.
   root.querySelectorAll<HTMLElement>('.save-incoming').forEach((el) =>
-    el.addEventListener('click', async () => {
-      const id = el.dataset.id || '';
-      try {
-        const folder = await backend().SaveIncoming(id);
-        if (!folder) return; // cancelled: the file is still waiting
-        await refreshIncoming();
-        if (!state.incomingFolder) {
-          state.pendingRemember = folder;
-        } else {
-          toast('Saved');
-        }
-        render();
-      } catch (e) { toast(String(e)); }
+    el.addEventListener('click', (e) => {
+      e.stopPropagation(); // the row handles clicks too; don't run this twice
+      saveIncoming(el.dataset.id || '');
     }),
+  );
+  // The whole row, as the plan promised — not just the icon.
+  root.querySelectorAll<HTMLElement>('.inc-row').forEach((el) =>
+    el.addEventListener('click', () => saveIncoming(el.dataset.id || '')),
   );
   on('#remember-folder', 'click', async () => {
     const dir = state.pendingRemember;
@@ -1037,13 +1087,24 @@ function wire() {
     try { await backend().SetIncomingFolder(''); state.incomingFolder = ''; toast('You will be asked each time'); render(); }
     catch (e) { toast(String(e)); }
   });
+  // Anything with data-href opens in the real browser, not in the app window.
+  on('.ext-link', 'click', (e) => {
+    e.stopPropagation();
+    const href = (e.currentTarget as HTMLElement).dataset.href || '';
+    if (href) (window as any).runtime?.BrowserOpenURL?.(href);
+  });
   on('#open-history', 'click', () => {
     const rt = (window as any).runtime;
     rt?.BrowserOpenURL?.('https://portal.share2.us/activity');
   });
+  // Toggle, not open. Hiding the duplicate <summary> removed the only other way
+  // to collapse this, so a strip link that could only ever open it left the user
+  // stuck with Settings expanded.
   on('#open-settings', 'click', () => {
     const d = root.querySelector<HTMLDetailsElement>('details.settings');
-    if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+    if (!d) return;
+    d.open = !d.open;
+    if (d.open) d.scrollIntoView({ block: 'nearest' });
   });
   on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
   on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });

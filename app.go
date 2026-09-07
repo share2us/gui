@@ -645,18 +645,31 @@ func stageDir() string {
 func (a *App) fileArrival(res lan.Result) {
 	folder := incoming.Folder()
 	if folder != "" {
-		dest := filepath.Join(folder, filepath.Base(res.Name))
+		// UniquePath, not the bare name: filing into a folder that already holds
+		// that name used to rename straight over it, destroying the earlier file
+		// with no prompt and no record. A second "report.pdf" now lands as
+		// "report (1).pdf".
+		dest := core.UniquePath(filepath.Join(folder, filepath.Base(res.Name)))
 		if err := os.Rename(res.Path, dest); err == nil {
+			// Still list it. A remembered folder means "stop asking me", not "hide
+			// it from me" — the user must be able to send this one somewhere else
+			// without going to Settings and switching back to "Ask each time".
+			// Retention never deletes a filed arrival; it only stops listing it.
+			_, _ = incoming.AddFiled(res.Name, res.From, dest, res.Bytes, folder)
 			a.notifyArrival(res.Name+" saved", "From "+res.From+" · "+folder)
 			wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
 				"name": res.Name, "path": dest, "bytes": res.Bytes, "from": res.From,
 			})
+			wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
 			return
 		}
 		// Could not file it where they asked; fall through so it waits rather
 		// than disappearing.
 	}
-	if _, err := incoming.Add(res.Name, res.From, res.Path, res.Bytes); err != nil {
+	// Stage, not Add: the arrival gets a name of its own inside staging so the
+	// sender's name is free for the next transfer. Without this a second copy of
+	// the same file name failed the whole transfer.
+	if _, err := incoming.Stage(res.Name, res.From, res.Path, res.Bytes); err != nil {
 		a.notifyArrival("Received "+res.Name, "From "+res.From)
 	} else {
 		a.notifyArrival("Received "+res.Name, "From "+res.From+" · choose where to save it")

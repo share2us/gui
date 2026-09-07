@@ -86,7 +86,7 @@ func (c *Client) saveInboxShare(ctx context.Context, s clicore.InboxShare, key [
 	if name == "" || name == "." {
 		name = s.PublicID
 	}
-	dst := uniquePath(filepath.Join(destDir, name))
+	dst := UniquePath(filepath.Join(destDir, name))
 	out, err := os.Create(dst)
 	if err != nil {
 		_ = tmp.Close()

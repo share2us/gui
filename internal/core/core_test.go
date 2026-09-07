@@ -60,11 +60,11 @@ func TestZipDirectoryRoundTrip(t *testing.T) {
 func TestUniquePath(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "file.txt")
-	if got := uniquePath(p); got != p {
+	if got := UniquePath(p); got != p {
 		t.Fatalf("unique on free path = %q, want %q", got, p)
 	}
 	writeFile(t, p, "x")
-	if got := uniquePath(p); got != filepath.Join(dir, "file (1).txt") {
+	if got := UniquePath(p); got != filepath.Join(dir, "file (1).txt") {
 		t.Fatalf("unique on taken path = %q, want file (1).txt", got)
 	}
 }
