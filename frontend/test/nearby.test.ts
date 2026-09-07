@@ -60,3 +60,24 @@ describe('this device', () => {
     expect(m.text()).toContain('HomeWiFi');
   });
 });
+
+describe('the opening frame', () => {
+  it('holds the feed at size until its data lands, then shows it', async () => {
+    // Nearby, incoming and recent all arrive asynchronously, so the window used
+    // to jump once, moments after opening.
+    let release: (v: unknown) => void = () => {};
+    const slow = new Promise((r) => (release = r));
+    const m = await mount({ ActivityLog: async () => { await slow; return []; } });
+
+    expect(m.$$('.sk').length).toBeGreaterThan(0);
+    release(null);
+    await m.settle(20);
+    expect(m.$$('.sk')).toHaveLength(0);
+  });
+
+  it('releases the placeholder even when the data fails to load', async () => {
+    const m = await mount({ ActivityLog: async () => { throw new Error('offline'); } });
+    await m.settle(20);
+    expect(m.$$('.sk')).toHaveLength(0);
+  });
+});
