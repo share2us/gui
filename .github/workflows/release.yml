@@ -19,8 +19,15 @@ name: release
 # after the work has been exercised on local `staging`, so a merge IS the decision
 # to ship. Before, `main` doubled as the working branch.
 #
-# The changelog gate still applies — a stable release FAILS when
-# CHANGELOG.md's [Unreleased] section is empty, so a merge cannot ship silence.
+# The changelog gate still applies, and reads: a stable release SAYS WHAT CHANGED.
+# A merge to `main` with an empty [Unreleased] ships nothing and cuts no release
+# (the author is saying this changed nothing a user sees); an explicit
+# workflow_dispatch with an empty [Unreleased] still FAILS, because a person
+# asked to ship and there is nothing to tell anyone.
+#
+# NOTE: rolling [Unreleased] under its version heading after a release is still
+# MANUAL, and skipping it is why the six releases of 2026-09-07 republished each
+# other's notes. Automating that roll is todo §YY/1.
 #
 # workflow_dispatch stays for BETA: a push carries no channel choice.
 on:
@@ -309,12 +316,25 @@ jobs:
           unreleased() { awk '/^## \[Unreleased\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md | sed '/<!--/,/-->/d'; }
           if unreleased | grep -q '[^[:space:]]'; then
             unreleased > "$NOTES_FILE"
-          else
-            if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
-              echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
-              exit 1
-            fi
+          elif [ "${{ inputs.channel || 'stable' }}" != stable ]; then
             echo "Beta build from ${GITHUB_SHA}. Not served to stable users." > "$NOTES_FILE"
+          elif [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            # A person asked for this release by hand. Refusing loudly is right:
+            # they meant to ship something and there is nothing to say about it.
+            echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
+            exit 1
+          else
+            # Reached by a merge to main. An empty [Unreleased] is the author
+            # saying this changed nothing a user sees - a refactor, a test, a CI
+            # tweak - so there is nothing to ship and no release is cut.
+            #
+            # This used to fail the run. Merges that change nothing user-facing
+            # are ordinary and frequent, so that painted the build red for doing
+            # the right thing, and a red build nobody can act on is a red build
+            # everybody learns to ignore. The contract is now: write notes and it
+            # ships, write none and it does not.
+            echo "::notice::[Unreleased] is empty - nothing user-facing to ship, so no release was cut for ${GITHUB_SHA}."
+            exit 0
           fi
           {
             echo ""

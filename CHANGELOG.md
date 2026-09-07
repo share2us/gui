@@ -13,8 +13,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
-<!-- Add user-facing changes here as they merge. A stable release refuses to
-     ship while this section is empty (HTML comments do not count). -->
+<!-- Add user-facing changes here as they merge. A merge to main with this
+     section empty cuts NO release; write a line here and the merge ships. -->
+
+## [20260907192031] - 2026-09-08
 
 ### Fixed
 - **A received file no longer overwrites one already in your folder.** With a save
