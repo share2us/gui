@@ -146,17 +146,59 @@ type Peer struct {
 	IsBroadcast bool   `json:"isBroadcast"` // true = offering a file to download
 	FileName    string `json:"fileName"`
 	FileSize    int64  `json:"fileSize"`
+	// ViaScan marks a device found by probing the subnet rather than by mDNS, so
+	// the UI can explain why it has an address instead of a name.
+	ViaScan bool `json:"viaScan"`
+	// ViaTailscale marks a device reached over the tailnet, which is not "nearby"
+	// in any physical sense and should not be described as if it were.
+	ViaTailscale bool `json:"viaTailscale"`
 }
 
 // Browse lists nearby Share2Us endpoints — receivers (send targets) and
 // broadcasters (files to download).
+//
+// It uses TWO independent methods and merges them, because either one alone
+// leaves a network where the app simply finds nothing:
+//
+//   - mDNS carries the device NAME and whether a peer is offering a file, but it
+//     is link-local multicast. Plenty of real networks drop it: access points
+//     with client isolation, a firewall that blocks inbound UDP 5353, a host
+//     whose own responder owns the port, or two devices on different subnets.
+//   - A direct subnet probe (lanshare.Scan) opens a TLS handshake against each
+//     address and recognises a receiver by its certificate. It never learns a
+//     name, but it does not care about multicast at all, so it works exactly
+//     where mDNS does not.
+//
+// Running both means a blocked multicast path degrades the label rather than the
+// feature: the device still appears, addressed by IP.
 func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
-	found, err := lanshare.Browse(ctx, timeout)
-	if err != nil {
-		return nil, err
+	type scanResult struct {
+		peers []lanshare.ScannedPeer
+		err   error
 	}
-	out := make([]Peer, 0, len(found))
+	scanCh := make(chan scanResult, 1)
+	go func() {
+		// The tailnet is enumerated rather than swept, so this stays cheap even
+		// though it reaches devices no local broadcast ever could.
+		peers, err := lanshare.Scan(ctx, lanshare.ScanOptions{Timeout: 400 * time.Millisecond})
+		scanCh <- scanResult{peers, err}
+	}()
+
+	found, mdnsErr := lanshare.Browse(ctx, timeout)
+	scan := <-scanCh
+
+	// Both failing is a real failure; either one alone is the case this exists
+	// for, so it is not reported as an error.
+	if mdnsErr != nil && scan.err != nil {
+		return nil, mdnsErr
+	}
+
+	out := make([]Peer, 0, len(found)+len(scan.peers))
+	seen := make(map[string]bool, len(found))
 	for _, p := range found {
+		if p.Fingerprint != "" {
+			seen[p.Fingerprint] = true
+		}
 		out = append(out, Peer{
 			Name:        p.Name,
 			Addr:        p.Addr(),
@@ -167,6 +209,26 @@ func Browse(ctx context.Context, timeout time.Duration) ([]Peer, error) {
 			IsBroadcast: p.IsBroadcast,
 			FileName:    p.FileName,
 			FileSize:    p.FileSize,
+		})
+	}
+	// Add only what mDNS did not already describe: its entry carries the name.
+	for _, p := range scan.peers {
+		if p.Fingerprint == "" || seen[p.Fingerprint] {
+			continue
+		}
+		seen[p.Fingerprint] = true
+		out = append(out, Peer{
+			// No name is available over a TLS probe. The address is shown rather
+			// than an invented label, so the user is never told a device is
+			// something it might not be; the verify code still identifies it.
+			Name:         p.Host,
+			Addr:         p.Addr(),
+			Dest:         lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
+			Code:         lanshare.VerifyCode(p.Fingerprint),
+			Mode:         "",
+			Fingerprint:  p.Fingerprint,
+			ViaScan:      true,
+			ViaTailscale: p.ViaTailscale,
 		})
 	}
 	return out, nil

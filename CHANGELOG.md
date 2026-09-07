@@ -16,6 +16,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Fixed
+- **Nearby devices are found even when the network blocks multicast.** The app
+  looked for devices only by name announcement (mDNS), which plenty of ordinary
+  networks drop — access points with client isolation, a firewall blocking
+  inbound UDP 5353, or a device whose own responder holds the port. On those
+  networks two laptops on the same Wi-Fi could never see each other. The app now
+  also probes the network directly, recognising a device by its certificate, so
+  it appears regardless. A device found that way is listed by address, since no
+  name was announced, and shows the same verify code.
+
 ## [20260907163356] - 2026-09-07
 
 ### Fixed
