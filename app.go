@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	neturl "net/url"
@@ -24,6 +25,7 @@ import (
 	"github.com/share2us/gui/internal/autostart"
 	"github.com/share2us/gui/internal/clip"
 	"github.com/share2us/gui/internal/core"
+	"github.com/share2us/gui/internal/incoming"
 	"github.com/share2us/gui/internal/lan"
 	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/shell"
@@ -409,7 +411,7 @@ func (a *App) LanStartReceive() (lan.Listen, error) {
 
 	ready := make(chan lan.Listen, 1)
 	errc := make(chan error, 1)
-	r := lan.StartReceive(a.ctx, receiver.DownloadsDir(),
+	r := lan.StartReceive(a.ctx, stageDir(),
 		func(l lan.Listen) {
 			select {
 			case ready <- l:
@@ -490,17 +492,14 @@ func (a *App) SetDiscoverable(on bool) error {
 	if name == "" {
 		name = "Share2Us"
 	}
-	a.discRecv = lan.Serve(a.ctx, name, receiver.DownloadsDir(),
+	a.discRecv = lan.Serve(a.ctx, name, stageDir(),
 		func(l lan.Listen) {
 			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"address": l.Address, "name": name, "code": l.Code, "safety": lanid.SafetyNumber()})
 		},
 		a.approveRequest,
 		func(res lan.Result) {
 			lanid.ActivityAppend(lanid.ActivityEntry{Kind: "received", Peer: res.From, Name: res.Name, Size: res.Bytes})
-			wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
-				"name": res.Name, "path": res.Path, "bytes": res.Bytes, "from": res.From,
-			})
-			_ = beeep.Notify("Share2Us", "Received "+res.Name+" from "+res.From, "")
+			a.fileArrival(res)
 		},
 		func(err error) {
 			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"error": err.Error()})
@@ -508,6 +507,112 @@ func (a *App) SetDiscoverable(on bool) error {
 	a.discoverable = true
 	return nil
 }
+
+// stageDir is where an arrival lands before the user has said what to do with
+// it. Falling back to Downloads keeps a transfer working even if the staging
+// directory cannot be created, because losing someone's file is worse than
+// filing it somewhere they did not pick.
+func stageDir() string {
+	if d, err := incoming.StagePath(); err == nil {
+		return d
+	}
+	return receiver.DownloadsDir()
+}
+
+// fileArrival decides what happens the moment a file lands.
+//
+// With a remembered folder it goes straight there and the notification says
+// where, so the user can find it. Without one it waits in staging and the
+// notification asks for a decision instead of announcing a location the user
+// never chose. Both paths notify through here, so swapping the native
+// notification for Firebase later is one substitution rather than a hunt
+// through the receive paths.
+func (a *App) fileArrival(res lan.Result) {
+	folder := incoming.Folder()
+	if folder != "" {
+		dest := filepath.Join(folder, filepath.Base(res.Name))
+		if err := os.Rename(res.Path, dest); err == nil {
+			a.notifyArrival(res.Name+" saved", "From "+res.From+" · "+folder)
+			wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
+				"name": res.Name, "path": dest, "bytes": res.Bytes, "from": res.From,
+			})
+			return
+		}
+		// Could not file it where they asked; fall through so it waits rather
+		// than disappearing.
+	}
+	if _, err := incoming.Add(res.Name, res.From, res.Path, res.Bytes); err != nil {
+		a.notifyArrival("Received "+res.Name, "From "+res.From)
+	} else {
+		a.notifyArrival("Received "+res.Name, "From "+res.From+" · choose where to save it")
+	}
+	wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
+}
+
+// notifyArrival is the single place an arrival is announced. Firebase Cloud
+// Messaging replaces the body of this function later; nothing else needs to
+// know.
+func (a *App) notifyArrival(title, body string) {
+	_ = beeep.Notify("Share2Us: "+title, body, "")
+}
+
+// IncomingList returns what has arrived and is still waiting to be filed.
+func (a *App) IncomingList() []incoming.Item { return incoming.List() }
+
+// IncomingFolder is the remembered save location, "" when the app should ask.
+func (a *App) IncomingFolder() string { return incoming.Folder() }
+
+// SetIncomingFolder picks the folder arrivals go to from now on. An empty string
+// restores asking each time, so the choice is reversible.
+func (a *App) SetIncomingFolder(dir string) error { return incoming.SetFolder(dir) }
+
+// ChooseIncomingFolder opens the native folder picker and remembers the result.
+func (a *App) ChooseIncomingFolder() (string, error) {
+	dir, err := wailsRuntime.OpenDirectoryDialog(a.ctx, wailsRuntime.OpenDialogOptions{
+		Title: "Where should received files be saved?",
+	})
+	if err != nil || dir == "" {
+		return "", err
+	}
+	return dir, incoming.SetFolder(dir)
+}
+
+// SaveIncoming asks where a waiting file should go and puts it there. Returns
+// the folder it was saved into so the caller can offer to remember it.
+func (a *App) SaveIncoming(id string) (string, error) {
+	it, ok := incoming.Get(id)
+	if !ok {
+		return "", fmt.Errorf("that file is no longer waiting")
+	}
+	dest, err := wailsRuntime.SaveFileDialog(a.ctx, wailsRuntime.SaveDialogOptions{
+		Title:           "Save received file",
+		DefaultFilename: it.Name,
+	})
+	if err != nil {
+		return "", err
+	}
+	if dest == "" {
+		return "", nil // cancelled: the file stays put
+	}
+	if err := incoming.Claim(id, dest); err != nil {
+		return "", err
+	}
+	wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
+	return filepath.Dir(dest), nil
+}
+
+// DiscardIncoming deletes a waiting file the user does not want.
+func (a *App) DiscardIncoming(id string) error {
+	if err := incoming.Discard(id); err != nil {
+		return err
+	}
+	wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
+	return nil
+}
+
+// SweepIncoming deletes arrivals nobody filed in a week and reports the count,
+// so they are never removed silently.
+func (a *App) SweepIncoming() int { return incoming.Sweep(7 * 24 * time.Hour) }
 
 // approveRequest decides an inbound transfer. A device the receiver has trusted
 // (by its verified key fingerprint) bypasses the verify code and the anti-spam

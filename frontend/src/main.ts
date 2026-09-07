@@ -25,7 +25,7 @@ type ShareOutcome = { path: string; ok: boolean; link?: string; error?: string }
 type LoginInfo = { userCode: string; verificationUrl: string; verificationUri: string };
 // A file that has arrived and is waiting in staging until the user says where it
 // goes. Deliberately not written to a default folder behind their back.
-type Incoming = { id: string; name: string; size: number; from: string; at: string };
+type Incoming = { id: string; name: string; size: number; from: string; at: string; file: string };
 
 type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string; channel: string; prerelease: boolean };
 type LanPeer = {
@@ -60,6 +60,12 @@ interface AppBackend {
   IsStoreManaged(): Promise<boolean>;
   UpdateChannel(): Promise<string>;
   BuildVersion(): Promise<string>;
+  IncomingList(): Promise<Incoming[]>;
+  IncomingFolder(): Promise<string>;
+  SetIncomingFolder(dir: string): Promise<void>;
+  ChooseIncomingFolder(): Promise<string>;
+  SaveIncoming(id: string): Promise<string>;
+  DiscardIncoming(id: string): Promise<void>;
   SetUpdateChannel(channel: string): Promise<void>;
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
   LanBrowse(): Promise<LanPeer[]>;
@@ -103,7 +109,9 @@ const state = {
   storeManaged: false as boolean, // Microsoft Store build/install -> updater hidden
   updateChannel: 'stable' as string, // 'stable' | 'beta'; shared with the CLI via config.json
 
-  incoming: [] as Incoming[], // staged arrivals awaiting a save location (phase 5)
+  incoming: [] as Incoming[], // staged arrivals awaiting a save location
+  incomingFolder: '' as string, // remembered destination; '' means ask each time
+  pendingRemember: '' as string, // folder just used, offered as the default once
   scanInterval: 60 as number,
   buildVersion: '' as string,
   // share modal
@@ -144,6 +152,8 @@ async function boot() {
     state.storeManaged = await backend().IsStoreManaged().catch(() => false);
     state.updateChannel = await backend().UpdateChannel().catch(() => 'stable');
     state.buildVersion = await backend().BuildVersion().catch(() => '');
+    state.incomingFolder = await backend().IncomingFolder().catch(() => '');
+    await refreshIncoming();
     state.bc = await backend().BroadcastStats().catch(() => null);
     if (state.bc && !state.bc.active) state.bc = null;
     // Opened via the Share verb with files -> jump straight to the Share modal.
@@ -262,7 +272,17 @@ function sectionNearby(): string {
 // Only rendered when something is waiting: an empty section would be a permanent
 // reminder of nothing.
 function sectionIncoming(): string {
-  if (!state.incoming.length) return '';
+  // The offer to remember a folder must outlive the list. Saving the LAST
+  // waiting file empties it, and an early return here made the offer disappear
+  // at exactly the moment it was earned.
+  const remember = state.pendingRemember
+    ? `<div class="warn-line">Always save received files to <b>${escapeHtml(state.pendingRemember)}</b>?
+         <button class="btn-mini" id="remember-folder">Always save here</button>
+         <button class="btn-mini" id="remember-dismiss" style="background:transparent;color:var(--text-2)">Not now</button></div>`
+    : '';
+  if (!state.incoming.length) {
+    return remember ? `<div class="sec-head"><b>Incoming</b></div>${remember}` : '';
+  }
   const rows = state.incoming
     .map(
       (f) => `<div class="item">
@@ -272,7 +292,7 @@ function sectionIncoming(): string {
     </div>`,
     )
     .join('');
-  return `<div class="sec-head"><b>Incoming</b><span class="meta">waiting to be saved</span></div>${rows}`;
+  return `<div class="sec-head"><b>Incoming</b><span class="meta">waiting to be saved</span></div>${rows}${remember}`;
 }
 
 // Capped at five. The full history lives in the portal rather than being rebuilt
@@ -602,6 +622,13 @@ function settingsBlock(): string {
       <label class="setting-row${state.storeManaged ? ' is-disabled' : ''}"><input type="checkbox" id="set-beta" ${state.updateChannel === 'beta' ? 'checked' : ''} ${state.storeManaged ? 'disabled' : ''} /><span class="setting-label">Get beta builds<span class="setting-help">${state.storeManaged ? 'The Microsoft Store manages updates for this install.' : 'Pre-release builds before they reach everyone. Also switches the s2u command line on this machine.'}</span></span></label>
       ${trustedBlock()}
       ${state.activity.length ? `<button class="btn-mini" id="clear-activity">Clear activity log</button>` : ''}
+      <div class="setting-row" style="justify-content:space-between">
+        <span class="setting-label">Received files${state.incomingFolder ? '' : ' · you are asked each time'}<span class="setting-help">${state.incomingFolder ? escapeHtml(state.incomingFolder) : 'Nothing is saved anywhere until you choose.'}</span></span>
+        <span style="display:flex;gap:6px;flex:none">
+          <button class="btn-hdr" id="change-folder">Change</button>
+          ${state.incomingFolder ? `<button class="btn-hdr" id="clear-folder">Ask each time</button>` : ''}
+        </span>
+      </div>
       ${s.loggedIn ? `<div class="setting-row" style="justify-content:space-between"><span class="setting-label">Signed in as ${escapeHtml(s.email)}</span><button class="btn-hdr" id="logout-btn">Log out</button></div>` : ''}
     </div>
   </details>`;
@@ -722,6 +749,7 @@ async function stopBroadcast() {
 
 // ---- Data refresh ----------------------------------------------------------
 
+async function refreshIncoming() { try { state.incoming = (await backend().IncomingList()) || []; } catch { /* */ } }
 async function refreshActivity() { try { state.activity = (await backend().ActivityLog()) || []; } catch { /* */ } }
 async function loadTrusted() { try { state.trusted = (await backend().ListTrusted()) || []; render(); } catch { /* */ } }
 let scanTimer = 0;
@@ -825,6 +853,43 @@ function wire() {
       render();
     }),
   );
+  // Save a waiting arrival. The native dialog cannot carry a "remember this"
+  // checkbox, so the offer comes after the save, once, and only while no folder
+  // is set — asking again every time would be nagging.
+  root.querySelectorAll<HTMLElement>('.save-incoming').forEach((el) =>
+    el.addEventListener('click', async () => {
+      const id = el.dataset.id || '';
+      try {
+        const folder = await backend().SaveIncoming(id);
+        if (!folder) return; // cancelled: the file is still waiting
+        await refreshIncoming();
+        if (!state.incomingFolder) {
+          state.pendingRemember = folder;
+        } else {
+          toast('Saved');
+        }
+        render();
+      } catch (e) { toast(String(e)); }
+    }),
+  );
+  on('#remember-folder', 'click', async () => {
+    const dir = state.pendingRemember;
+    state.pendingRemember = '';
+    try { await backend().SetIncomingFolder(dir); state.incomingFolder = dir; toast('Received files will be saved there'); }
+    catch (e) { toast(String(e)); }
+    render();
+  });
+  on('#remember-dismiss', 'click', () => { state.pendingRemember = ''; render(); });
+  on('#change-folder', 'click', async () => {
+    try {
+      const dir = await backend().ChooseIncomingFolder();
+      if (dir) { state.incomingFolder = dir; toast('Received files will be saved there'); render(); }
+    } catch (e) { toast(String(e)); }
+  });
+  on('#clear-folder', 'click', async () => {
+    try { await backend().SetIncomingFolder(''); state.incomingFolder = ''; toast('You will be asked each time'); render(); }
+    catch (e) { toast(String(e)); }
+  });
   on('#open-history', 'click', () => {
     const rt = (window as any).runtime;
     rt?.BrowserOpenURL?.('https://portal.share2.us/activity');
@@ -953,6 +1018,7 @@ function setupListeners() {
     render();
   });
   rt?.EventsOn?.('lan-recv-done', () => { refreshActivity().then(render); });
+  rt?.EventsOn?.('incoming-changed', () => { refreshIncoming().then(render); });
   rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); state.discSafety = String(d?.safety || ''); render(); } });
   rt?.EventsOn?.('lan-bc-conn', async () => { try { state.bc = await backend().BroadcastStats(); if (state.view === 'broadcast' || (state.view === 'home')) render(); } catch { /* */ } });
   window.addEventListener('focus', () => checkClipboard());
