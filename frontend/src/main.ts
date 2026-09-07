@@ -31,6 +31,9 @@ type UpdateInfo = { available: boolean; current: string; latest: string; assetUr
 type LanPeer = {
   name: string; addr: string; dest: string; code: string; mode: string;
   fingerprint: string; isBroadcast: boolean; fileName: string; fileSize: number;
+  // Found by probing the subnet rather than by mDNS, so there is no name to show
+  // and "nearby" may mean "over the tailnet".
+  viaScan?: boolean; viaTailscale?: boolean;
 };
 type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string; trusted?: boolean };
 type TrustedDevice = { fingerprint: string; name: string; mode: 'ask' | 'auto' };
@@ -297,7 +300,7 @@ function sectionNearby(): string {
   for (const p of state.peers.filter((x) => !x.isBroadcast)) rows.push(nearbyRow(p));
   const body = rows.length
     ? rows.join('')
-    : `<div class="empty">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on. Press ↻ to scan again.</div>`;
+    : `<div class="empty">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — check that over there first, then press ↻. Devices are looked for by name and by probing this network directly, so a device on the same network should appear even if its name does not.</div>`;
   return `<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" aria-label="Scan for nearby devices again" title="Scan for nearby devices again (automatic every ${state.scanInterval || 60}s). This does not update the app.">↻</button></div>${body}`;
 }
 
@@ -349,9 +352,12 @@ function bcastRow(p: LanPeer): string {
 }
 
 function nearbyRow(p: LanPeer): string {
+  const label = p.viaScan
+    ? `<b>${escapeHtml(p.addr)}</b> <span class="meta">${p.viaTailscale ? 'over Tailscale' : 'name not announced'}</span>`
+    : `<b>${escapeHtml(p.name)}</b> <span class="meta">${escapeHtml(p.addr)}</span>`;
   return `<div class="item">
     <div class="ico rx">📡</div>
-    <div class="line"><b>${escapeHtml(p.name)}</b> <span class="meta">${escapeHtml(p.addr)}</span>${
+    <div class="line" ${p.viaScan ? 'title="Found by probing the network directly. This device is reachable, but its name did not arrive, which usually means multicast (mDNS) is blocked between you."' : ''}>${label}${
       p.code ? ` <span class="tag code">${escapeHtml(p.code)}</span>` : ''
     }</div>
     <div class="acts"><button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" title="Send to this device">→</button></div>
@@ -446,7 +452,7 @@ function destPicker(loggedIn: boolean): string {
     }
     ${
       state.peers.filter((p) => !p.isBroadcast).length
-        ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev${state.picked?.dest === p.dest ? ' picked' : ''}"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code" title="Verify code. Check it matches what that device shows, so you know it is really them. It is not something you type in here.">${escapeHtml(p.code)}</span>` : ''}<button class="ib${state.picked?.dest === p.dest ? ' on' : ''} pick-dev" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(p.name)}" title="${state.picked?.dest === p.dest ? 'Selected' : 'Select this device'}" style="margin-left:4px">${state.picked?.dest === p.dest ? '✓' : '→'}</button></div>`).join('')
+        ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev${state.picked?.dest === p.dest ? ' picked' : ''}"><span class="n">${p.viaScan ? `<b>${escapeHtml(p.addr)}</b>` : `<b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}`}</span>${p.code ? `<span class="tag code" title="Verify code. Check it matches what that device shows, so you know it is really them. It is not something you type in here.">${escapeHtml(p.code)}</span>` : ''}<button class="ib${state.picked?.dest === p.dest ? ' on' : ''} pick-dev" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(p.name)}" title="${state.picked?.dest === p.dest ? 'Selected' : 'Select this device'}" style="margin-left:4px">${state.picked?.dest === p.dest ? '✓' : '→'}</button></div>`).join('')
         : `<div class="hint">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — turn that on over there, then press ↻ on Home. Or type its address below, which also works when the two devices are on different networks and cannot see each other.</div>`
     }
     <div class="or-line"><span>or enter its address</span></div>
