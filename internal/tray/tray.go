@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 // Package tray runs the Share2Us system-tray icon and its menu (Open, Open
 // Downloads, Quit) around the background receiver. systray.Run takes over the
 // main thread, so the tray is its own process mode (--tray), separate from the

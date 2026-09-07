@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 // Package receiver runs the background inbox loop: poll for incoming device/
 // contact sends, decrypt them, and save them into the Downloads folder. It is
 // platform-independent and takes a Poller (satisfied by core.Client), so it

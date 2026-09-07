@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 //go:build linux
 
 // Package shell's Linux integration. There is no single "right-click Share" API

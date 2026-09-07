@@ -152,3 +152,18 @@ in `go.mod`.
 share2us-gui.exe --install-shell     # adds  s2u ▸ Share  for files and folders (HKCU, no admin)
 share2us-gui.exe --uninstall-shell
 ```
+
+## License
+
+[GNU General Public License v3.0 only](LICENSE) © 2026 Hassan Khurram
+
+The Share2Us desktop app is free software: you may use, study, share and modify
+it. If you distribute it — modified or not — you must pass on the same freedoms
+and make the corresponding source available under the GPL. Building your own
+copy for your own use carries no obligation.
+
+This repository previously carried **no licence file at all**, which meant
+default copyright ("all rights reserved") despite being public. That was an
+oversight, not an intent; the GPL now applies. Dependency licences are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+

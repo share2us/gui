@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 //go:build windows
 
 // Package shell registers (and removes) the Explorer right-click integration.

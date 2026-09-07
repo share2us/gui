@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 // Package clip reads shareable content (image or text) directly from the OS
 // clipboard so the app can offer a one-click "share what you just copied"
 // suggestion. The real implementation is Windows-only (where it needs no CGO);

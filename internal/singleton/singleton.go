@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 // Package singleton is a small cross-platform single-instance guard built on a
 // loopback listener: the first process to bind the port owns the instance, and
 // the OS frees the port automatically when that process exits (so there are no

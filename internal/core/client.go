@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 // Package core is the platform-independent heart of the Share2Us Windows app.
 // It wraps the reusable cli-core library (auth, upload, crypto, inbox) so the
 // Wails UI and the tray receiver share one implementation and stay faithful to
