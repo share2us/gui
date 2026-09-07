@@ -102,19 +102,24 @@ Implemented and verified (Linux build + Windows cross-compile + unit tests):
 
 - [x] Linux file-manager integration: KDE/Dolphin ServiceMenu + Nemo action + "Open With" (XDG, no admin)
 - [x] Windows installer (Inno Setup) with GUI / CLI / both component choice + shared login (`installer/`)
+- [x] Graphical tray icon around the receiver loop (`internal/tray/`)
+- [x] "Send to network" — LAN transfer via `cli-core/lanshare` (`internal/lan/`)
+- [x] LAN broadcast: offer a file for nearby devices to pull, with mutual identity verification
+- [x] Approval prompts for inbound LAN sends and downloads (`approve` access mode)
+- [x] Home activity feed (`lanid.ActivityAppend`)
+
+Verified against the code on 2026-09-07 — the seven items above were previously
+listed as "not yet done" long after they shipped.
 
 Not yet done (see the plan for phasing):
 
-- [ ] Graphical tray icon (menu: open Downloads, pause, quit) around the receiver loop
-- [ ] Approval prompts for untrusted senders (pending inbox) surfaced from the tray
 - [ ] Nautilus (GNOME) native right-click submenu (needs a python3-nautilus extension)
 - [ ] macOS Finder integration (deferred — needs code-signing)
 - [ ] Linux packaging (`.deb` / AppImage) with the same GUI/CLI/both choice
-- [ ] Background tray receiver + native toasts + autostart + approval prompts
 - [ ] Contact device-exposure trust UI + the backend `contact_sender_devices` addition
-- [ ] "Send to network" (LAN via `cli-core/lanshare`)
-- [ ] Recents, add-device/contact management, installers, code-signing
+- [ ] Recents, add-device/contact management, code-signing
 - [ ] Exact `<name>:<os>` label (needs an `OS` field on `cli-core` `DeviceSession`)
+- [ ] Two-machine verification of broadcast/resume on real hardware (loopback only so far)
 
 ## Building
 
