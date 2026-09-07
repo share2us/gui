@@ -175,10 +175,6 @@ body {
 /* Top-level banners (sign-in, update) sit between header and body, never scroll. */
 .modal > .banner,
 .modal > .banner-err,
-.modal > .update-bar {
-  flex: 0 0 auto;
-  margin: 12px 18px 0;
-}
 .brand {
   display: flex;
   align-items: center;
@@ -279,18 +275,6 @@ body {
 .banner-err {
   margin-top: 6px;
   color: var(--danger);
-  font-size: 12.5px;
-}
-.update-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--accent);
-  border-radius: var(--r-lg);
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
-  color: var(--text-1);
   font-size: 12.5px;
 }
 .btn-mini {
@@ -484,8 +468,17 @@ select {
   color: var(--text-1);
   padding: 8px 10px;
   font-size: 13px;
-  outline: none;
+  /* No blanket `outline: none` here. It used to sit in this block, and at
+     specificity 0-1-1 it beat the app's :focus-visible rule (0-1-0 through
+     :where), so not one text field or select ever showed a focus ring. Only the
+     mouse-driven case is suppressed now, and :focus-visible keeps the keyboard
+     one. */
   transition: border-color 0.12s;
+}
+input[type="text"]:focus:not(:focus-visible),
+input[type="password"]:focus:not(:focus-visible),
+select:focus:not(:focus-visible) {
+  outline: none;
 }
 input:focus,
 select:focus {
@@ -636,6 +629,9 @@ select:focus {
   border-top: 1px solid var(--border);
 }
 .foot-reason {
+  /* Always present, so adding a file or choosing a device cannot resize the
+     footer and shove the list above it. Empty it still occupies its line. */
+  min-height: 1.25em;
   color: var(--text-2);
   font-size: 12.5px;
   line-height: 1.4;
@@ -738,6 +734,9 @@ select:focus {
 
 /* ── Clipboard suggestion chip ─────────────────────────────────────────── */
 .clip-suggest {
+  /* Reserved: the clipboard is re-checked on every window focus, so this slot
+     must not change the canvas geometry when a suggestion appears. */
+  min-height: 34px;
   margin-top: 14px;
   display: flex;
   flex-direction: column;
@@ -908,6 +907,14 @@ select:focus {
 }
 .inc-row:hover {
   background: var(--bg-2);
+}
+
+/* The destination cards and broadcast modes are radio groups. They are divs, so
+   the ring has to be asked for explicitly. */
+.dest-opt:focus-visible,
+.mode:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .or-line {
@@ -1206,7 +1213,7 @@ select:focus {
   gap: 6px;
 }
 .warn-ic {
-  color: #e0a83a;
+  color: var(--warning);
   font-size: 14px;
   cursor: default;
 }
@@ -1457,8 +1464,8 @@ select:focus {
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--text-1);
-  background: color-mix(in srgb, #e0a83a 14%, var(--bg-2));
-  border: 1px solid color-mix(in srgb, #e0a83a 40%, var(--border));
+  background: var(--warning-soft);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
   border-radius: 8px;
   padding: 9px 11px;
 }
@@ -1510,7 +1517,7 @@ select:focus {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.link-field:focus {
+.link-field:focus:not(:focus-visible) {
   outline: none;
   border-color: var(--accent);
 }
@@ -1679,6 +1686,28 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 .sec-head .meta { font-weight: 400; color: var(--text-3); font-size: var(--fs-xs); }
 
 /* Shai's coming-soon panel, anchored under its header launcher. */
+/* The update panel reuses the positioned Shai panel so it overlays instead of
+   displacing the app. */
+.upd-panel .upd-body {
+  padding: var(--s4) var(--s5);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.upd-cur {
+  color: var(--text-3);
+  margin-top: 2px;
+}
+.upd-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+  padding: 0 var(--s5) var(--s4);
+}
+
+/* Warning surfaces use the theme's own tokens. These were hardcoded ambers,
+   defined once outside both palettes, so they did not change with the theme —
+   and .warn-line is the app's main warning surface, now carrying the
+   Public-network notice too. */
 .shai-panel {
   position: absolute;
   right: var(--s6);
@@ -1713,7 +1742,7 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
   letter-spacing: .04em; text-transform: uppercase;
   color: var(--warning);
   background: var(--warning-soft);
-  border: 1px solid rgba(251, 191, 36, .35);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
   border-radius: var(--r-md);
   padding: 2px 6px;
 }

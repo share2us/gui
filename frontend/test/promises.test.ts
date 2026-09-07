@@ -129,3 +129,54 @@ describe('project links', () => {
     expect(m.opened).toContain('https://github.com/share2us');
   });
 });
+
+describe('software update', () => {
+  const ready = { available: true, current: '20260908', latest: '20260909', prerelease: false, assetUrl: '', assetName: '', page: '', channel: 'stable' };
+
+  it('marks the icon rather than inserting a bar into the layout', async () => {
+    // The dot was added and the banner was never removed, so the app announced an
+    // update twice and pushed the whole body down when the check came back.
+    const m = await mount({ CheckUpdate: async () => ready });
+    await m.settle(30);
+    expect(m.$('#check-update')?.classList.contains('has-dot')).toBe(true);
+    expect(m.$('.update-bar')).toBeNull();
+  });
+
+  it('offers Install in a panel, opened from the icon', async () => {
+    const m = await mount({ CheckUpdate: async () => ready });
+    await m.settle(30);
+    expect(m.$('#upd-panel')).toBeNull(); // nothing until asked for
+    await click(m, '#check-update');
+    expect(m.$('#upd-panel')).not.toBeNull();
+    expect(m.$('#apply-update')).not.toBeNull();
+    expect(m.text()).toContain('20260909');
+  });
+
+  it('closes again', async () => {
+    const m = await mount({ CheckUpdate: async () => ready });
+    await m.settle(30);
+    await click(m, '#check-update');
+    await click(m, '#upd-close');
+    expect(m.$('#upd-panel')).toBeNull();
+  });
+
+  it('says so when there is nothing to install', async () => {
+    const m = await mount({ CheckUpdate: async () => null });
+    await click(m, '#check-update');
+    await m.settle(30);
+    expect(m.text()).toMatch(/up to date/i);
+    expect(m.$('#apply-update')).toBeNull();
+  });
+});
+
+describe('the reason under the primary button', () => {
+  it('keeps its line even when there is nothing to say', async () => {
+    // It used to appear and vanish as files were added and a device chosen,
+    // resizing the sticky footer and the list above it.
+    const m = await mount({ PendingPaths: async () => ['/tmp/a.pdf'] });
+    await click(m, '[data-send-mode="link"]');
+    await click(m, '[data-dest-opt="public"]');
+    expect(m.$('.foot-reason')).not.toBeNull();
+    expect(m.$('.foot-reason')?.textContent?.trim()).toBe('');
+  });
+});
