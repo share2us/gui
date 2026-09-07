@@ -28,6 +28,7 @@ import (
 	"github.com/share2us/gui/internal/core"
 	"github.com/share2us/gui/internal/incoming"
 	"github.com/share2us/gui/internal/lan"
+	"github.com/share2us/gui/internal/netprofile"
 	"github.com/share2us/gui/internal/prefs"
 	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/shell"
@@ -530,6 +531,24 @@ func (a *App) LanBrowse(deep bool) ([]lan.Peer, error) {
 // enough that a device switched on is found without anyone pressing anything;
 // long enough that it is not a recurring pattern on the network.
 const deepScanEvery = 10 * time.Minute
+
+// NetworkProfile reports how the operating system classifies this network, so
+// the UI can explain the one failure that looks exactly like the app being
+// broken: on a network Windows calls Public, firewall rules scoped to Private do
+// not apply, and inbound discovery and transfers are dropped silently.
+//
+// The installer now allows the app on every profile, so this is a diagnosis for
+// installs that predate that or had the rule removed — not the fix.
+func (a *App) NetworkProfile() netprofile.Status { return netprofile.Current() }
+
+// OpenNetworkSettings opens the operating system's own network settings, which
+// is where the classification is changed. Deliberately not changed for the user:
+// it needs administrator rights, and reclassifying a network as trusted is the
+// user's decision about their surroundings, not something a file-sharing app
+// should do on one click.
+func (a *App) OpenNetworkSettings() error {
+	return netprofile.OpenSettings()
+}
 
 // LocalAddresses lists this machine's own IPv4 addresses, most LAN-reachable
 // first. The status strip shows one; this is for the case a machine has several
