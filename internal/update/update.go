@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 //go:build !store
 
 // Package update checks GitHub Releases for a newer Share2Us build. Versions are

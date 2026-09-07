@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 //go:build !windows && !linux
 
 // Package shell's fallback build for platforms without file-manager integration

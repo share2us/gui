@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 // Package lan wraps cli-core's lanshare (account-free, direct TLS 1.3 + PAKE
 // transfers over the local network / Tailscale) with a GUI-friendly surface:
 // one-shot Send that transparently zips folders, and a cancelable background

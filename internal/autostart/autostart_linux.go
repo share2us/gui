@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 //go:build linux
 
 // Package autostart, Linux: an XDG autostart .desktop entry (works on GNOME, KDE,

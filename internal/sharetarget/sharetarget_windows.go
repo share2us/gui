@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 //go:build windows
 
 // Package sharetarget handles Windows Share Target activation — when S2u is
