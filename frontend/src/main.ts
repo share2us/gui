@@ -727,18 +727,26 @@ async function submitTrustCode() {
   }
 }
 
+// Sign-in ran through three different heights in one flow — "starting", then a
+// taller "approve this device", then gone — moving the window under someone who
+// is reading a code off it. The slot is now one height throughout: only its
+// contents change.
 function loginProgress(): string {
-  if (state.loginPhase === 'waiting') {
-    const info = state.loginInfo;
-    if (!info) {
-      // Show feedback immediately, before BeginLogin returns, so a slow or
-      // unreachable sign-in server never looks like "nothing happened".
-      return `<div class="banner">Starting sign-in… <span class="hint">opening your browser</span></div>`;
-    }
-    return `<div class="banner">Approve this device in your browser${info.userCode ? ` — code <code>${escapeHtml(info.userCode)}</code>` : ''}. <span class="hint">Waiting…</span>${info.verificationUrl ? `<button class="btn-mini" id="reopen-login">Reopen page</button>` : ''}</div>`;
+  const waiting = state.loginPhase === 'waiting';
+  const failed = state.loginPhase === 'error' && !!state.loginError;
+  if (!waiting && !failed) return '';
+  const info = state.loginInfo;
+  let inner: string;
+  if (failed) {
+    inner = escapeHtml(state.loginError!);
+  } else if (!info) {
+    // Feedback immediately, before BeginLogin returns, so a slow or unreachable
+    // sign-in server never looks like "nothing happened".
+    inner = `Starting sign-in… <span class="hint">opening your browser</span>`;
+  } else {
+    inner = `Approve this device in your browser${info.userCode ? ` — code <code>${escapeHtml(info.userCode)}</code>` : ''}. <span class="hint">Waiting…</span>${info.verificationUrl ? `<button class="btn-mini" id="reopen-login">Reopen page</button>` : ''}`;
   }
-  if (state.loginPhase === 'error' && state.loginError) return `<div class="banner-err">${escapeHtml(state.loginError)}</div>`;
-  return '';
+  return `<div class="${failed ? 'banner-err' : 'banner'} login-slot">${inner}</div>`;
 }
 function filesBlock(): string {
   if (!state.paths.length) {
