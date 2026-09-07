@@ -55,6 +55,7 @@ interface AppBackend {
   ApplyUpdate(): Promise<void>;
   IsStoreManaged(): Promise<boolean>;
   UpdateChannel(): Promise<string>;
+  BuildVersion(): Promise<string>;
   SetUpdateChannel(channel: string): Promise<void>;
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
   LanBrowse(): Promise<LanPeer[]>;
@@ -99,6 +100,7 @@ const state = {
   updateChannel: 'stable' as string, // 'stable' | 'beta'; shared with the CLI via config.json
 
   scanInterval: 60 as number,
+  buildVersion: '' as string,
   // share modal
   dest: 'nearby' as Dest,
   bcAccess: 'approve' as 'all' | 'trusted' | 'approve',
@@ -133,6 +135,7 @@ async function boot() {
     state.scanInterval = await backend().GetScanInterval().catch(() => 60);
     state.storeManaged = await backend().IsStoreManaged().catch(() => false);
     state.updateChannel = await backend().UpdateChannel().catch(() => 'stable');
+    state.buildVersion = await backend().BuildVersion().catch(() => '');
     state.bc = await backend().BroadcastStats().catch(() => null);
     if (state.bc && !state.bc.active) state.bc = null;
     // Opened via the Share verb with files -> jump straight to the Share modal.
@@ -182,6 +185,18 @@ function discBanner(): string {
 
 // ---- Home ------------------------------------------------------------------
 
+
+// Build stamp in the window footer. Always rendered, even before the value
+// arrives, so it can never appear late and reflow the frame (design rule: no
+// layout shift). Click copies it, because the point of showing it is to be able
+// to quote it in a bug report.
+function buildStrip(): string {
+  const v = state.buildVersion;
+  return `<div class="build-strip" id="build-strip" title="${v ? 'Click to copy' : ''}">${
+    v ? `version <span class="build-ver">${escapeHtml(v)}</span>` : '&nbsp;'
+  }</div>`;
+}
+
 function renderHome(): void {
   root.innerHTML = `<div class="modal">
     ${header()}
@@ -198,6 +213,7 @@ function renderHome(): void {
     ${state.trustPrompt && !state.requests.length ? trustCodeOverlay(state.trustPrompt) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
+    ${buildStrip()}
   </div>`;
   wire();
 }
@@ -295,6 +311,7 @@ function renderShare(): void {
       ${footerReason() ? `<div class="foot-reason">${escapeHtml(footerReason())}</div>` : ''}
       <button class="btn-primary" id="primary-btn" ${canPrimary() ? '' : 'disabled'}>${escapeHtml(primaryLabel())}</button>
     </footer>
+    ${buildStrip()}
   </div>`;
   wire();
 }
@@ -357,6 +374,7 @@ function renderBroadcast(): void {
       ${completed.length ? `<div class="grp-label" style="margin-top:18px">Downloaded · <span class="n">${completed.length}</span></div>${completed.map(doneRow).join('')}` : ''}
       ${!downloading.length && !completed.length ? `<div class="empty">Waiting for someone to download… they'll see it when they scan nearby.</div>` : ''}
     </div>
+    ${buildStrip()}
   </div>`;
   wire();
 }
@@ -691,6 +709,7 @@ function wire() {
   });
   root.querySelector<HTMLInputElement>('#share-link')?.addEventListener('focus', (e) => (e.currentTarget as HTMLInputElement).select());
   on('.copy-link', 'click', (e) => { copy((e.currentTarget as HTMLElement).dataset.link || ''); toast('Link copied'); });
+  on('#build-strip', 'click', () => { if (state.buildVersion) { copy(state.buildVersion); toast('Version copied'); } });
   // settings
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
   disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) state.discCode = ''; render(); } catch { disc.checked = !disc.checked; } });
