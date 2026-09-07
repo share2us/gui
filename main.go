@@ -15,6 +15,7 @@ import (
 	"github.com/gen2brain/beeep"
 	"github.com/share2us/gui/internal/autostart"
 	"github.com/share2us/gui/internal/core"
+	"github.com/share2us/gui/internal/prefs"
 	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/sharetarget"
 	"github.com/share2us/gui/internal/shell"
@@ -116,7 +117,12 @@ func parseArgs(args []string) (pending []string, quit bool) {
 		exitOn("uninstall shell", shell.Uninstall())
 		return nil, true
 	case "--enable-autostart":
+		// The installer task that runs this reads "Receive files sent to this
+		// device (start at login)". Starting at login is only half of that: a
+		// device that is not discoverable receives nothing, so the box promised
+		// something the flag did not deliver. Ticking it now enables both.
 		exitOn("enable autostart", autostart.Enable(""))
+		exitOn("enable receiving", prefs.SetDiscoverable(true))
 		return nil, true
 	case "--disable-autostart":
 		exitOn("disable autostart", autostart.Disable())

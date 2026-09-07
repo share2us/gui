@@ -27,6 +27,7 @@ import (
 	"github.com/share2us/gui/internal/core"
 	"github.com/share2us/gui/internal/incoming"
 	"github.com/share2us/gui/internal/lan"
+	"github.com/share2us/gui/internal/prefs"
 	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/shell"
 	"github.com/share2us/gui/internal/update"
@@ -94,6 +95,16 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 	go cleanupOldTemps() // remove staged paste/update temp dirs left by prior runs
+	// Honour what the user last chose. Without this the app came up invisible
+	// every time, which is indistinguishable from the feature being broken — and
+	// is what the installer's "Receive files sent to this device" promised.
+	if prefs.Load().Discoverable {
+		go func() {
+			if err := a.SetDiscoverable(true); err != nil {
+				wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"error": err.Error()})
+			}
+		}()
+	}
 	go func() {
 		// Arrivals nobody filed do not live forever. The count is announced
 		// rather than the files vanishing quietly, because a file someone sent
@@ -386,7 +397,7 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
 	dest = strings.TrimSpace(dest)
 	if dest == "" {
-		return failAll(paths, errors.New("enter the receiver's code or address"))
+		return failAll(paths, errors.New("enter the receiver's address"))
 	}
 	out := make([]ShareOutcome, 0, len(paths))
 	for _, p := range paths {
@@ -492,6 +503,9 @@ func (a *App) SetDiscoverable(on bool) error {
 			a.discRecv = nil
 		}
 		a.discoverable = false
+		// Remember it. This used to live only in memory, so every launch started
+		// invisible however the user had left it.
+		_ = prefs.SetDiscoverable(false)
 		return nil
 	}
 	if a.discRecv != nil {
@@ -517,6 +531,7 @@ func (a *App) SetDiscoverable(on bool) error {
 			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"error": err.Error()})
 		})
 	a.discoverable = true
+	_ = prefs.SetDiscoverable(true)
 	return nil
 }
 
