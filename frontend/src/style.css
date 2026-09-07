@@ -1611,3 +1611,61 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 .item + .sec-head,
 .empty + .sec-head { margin-top: var(--s6); }
 .sec-head .meta { font-weight: 400; color: var(--text-3); font-size: var(--fs-xs); }
+
+/* Shai's coming-soon panel, anchored under its header launcher. */
+.shai-panel {
+  position: absolute;
+  right: var(--s6);
+  top: 52px;
+  z-index: 30;
+  width: calc(100% - var(--s6) * 2);
+  background: var(--bg-2);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.shai-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s5) var(--s5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-3);
+  font-size: var(--fs-sm);
+}
+.shai-av {
+  width: 26px; height: 26px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  color: var(--on-accent);
+  display: grid; place-items: center;
+  font-size: 12px; font-weight: 800;
+}
+.shai-soon {
+  font-size: 10px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid rgba(251, 191, 36, .35);
+  border-radius: var(--r-md);
+  padding: 2px 6px;
+}
+.shai-body { padding: var(--s5); font-size: var(--fs-xs); color: var(--text-2); line-height: var(--lh-normal); }
+.shai-body ul { margin: var(--s4) 0 0; padding-left: var(--s6); }
+.shai-body li { margin-bottom: var(--s2); }
+.shai-body li b { color: var(--text-1); font-weight: 600; }
+/* Deliberately inert: it looks like the input it will become, and does nothing,
+   which is the honest way to show something that is not built. */
+.shai-ask {
+  display: flex; align-items: center; gap: var(--s4);
+  margin: 0 var(--s5) var(--s5);
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  border-radius: var(--r-lg);
+  padding: var(--s4) var(--s5);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  cursor: not-allowed;
+}
+.shai-mic { margin-left: auto; opacity: .5; }

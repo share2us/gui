@@ -112,6 +112,7 @@ const state = {
   incoming: [] as Incoming[], // staged arrivals awaiting a save location
   incomingFolder: '' as string, // remembered destination; '' means ask each time
   pendingRemember: '' as string, // folder just used, offered as the default once
+  shaiOpen: false as boolean, // the coming-soon panel behind the header launcher
   scanInterval: 60 as number,
   buildVersion: '' as string,
   // share modal
@@ -221,6 +222,36 @@ function statusStrip(): string {
   </div>`;
 }
 
+// Shai's shell. The agent, chat and voice are not built (todo I); this says so
+// plainly and describes what it will do, including the part people are right to
+// ask about first: what it will never do without permission.
+//
+// Drawn as unmistakably unavailable rather than dressed up as live, because a
+// control that looks working and does nothing gets reported as a bug.
+function shaiPanel(): string {
+  if (!state.shaiOpen) return '';
+  return `<div class="shai-panel" id="shai-panel">
+    <div class="shai-head">
+      <span class="shai-av">✦</span>
+      <b>Shai</b>
+      <span class="shai-soon">Coming soon</span>
+      <button class="ib" id="shai-close" title="Close" style="margin-left:auto">✕</button>
+    </div>
+    <div class="shai-body">
+      Ask for the outcome and Shai does the steps, instead of you finding the screen:
+      <ul>
+        <li><b>“Send this folder to my laptop”</b></li>
+        <li><b>“Make a link that expires tomorrow”</b></li>
+        <li><b>“Who downloaded the report?”</b></li>
+      </ul>
+      Anything that cannot be undone, such as revoking a link, deleting a share or
+      trusting a device, it asks you to confirm first. It can never do more than
+      you can.
+    </div>
+    <div class="shai-ask">Ask Shai…<span class="shai-mic">🎙</span></div>
+  </div>`;
+}
+
 // ---- Home ------------------------------------------------------------------
 
 
@@ -249,6 +280,7 @@ function renderHome(): void {
     ${state.trustPrompt && !state.requests.length ? trustCodeOverlay(state.trustPrompt) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
+    ${shaiPanel()}
     ${statusStrip()}
     ${buildStrip()}
   </div>`;
@@ -380,6 +412,7 @@ function renderShare(): void {
       ${footerReason() ? `<div class="foot-reason">${escapeHtml(footerReason())}</div>` : ''}
       <button class="btn-primary" id="primary-btn" ${canPrimary() ? '' : 'disabled'}>${escapeHtml(primaryLabel())}</button>
     </footer>
+    ${shaiPanel()}
     ${statusStrip()}
     ${buildStrip()}
   </div>`;
@@ -472,6 +505,7 @@ function renderBroadcast(): void {
       ${completed.length ? `<div class="grp-label" style="margin-top:18px">Downloaded · <span class="n">${completed.length}</span></div>${completed.map(doneRow).join('')}` : ''}
       ${!downloading.length && !completed.length ? `<div class="empty">Waiting for someone to download… they'll see it when they scan nearby.</div>` : ''}
     </div>
+    ${shaiPanel()}
     ${statusStrip()}
     ${buildStrip()}
   </div>`;
@@ -898,7 +932,8 @@ function wire() {
     const d = root.querySelector<HTMLDetailsElement>('details.settings');
     if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
   });
-  on('#shai-open', 'click', () => toast('Shai is coming soon — it will do these tasks for you.'));
+  on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
+  on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
   disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) state.discCode = ''; render(); } catch { disc.checked = !disc.checked; } });
   const si = root.querySelector<HTMLSelectElement>('#scan-interval');
