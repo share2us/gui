@@ -238,7 +238,16 @@ func Browse(ctx context.Context, opts BrowseOptions) ([]Peer, error) {
 		return nil, mdnsErr
 	}
 
-	out := make([]Peer, 0, len(found)+len(scan.peers))
+	return mergePeers(found, scan.peers), nil
+}
+
+// mergePeers folds the two discovery methods into one list.
+//
+// Separated from Browse so it can be tested without a network: the rules here —
+// which source wins, what is deduplicated, what a nameless peer is called — are
+// where the mistakes live, and none of them need a socket to be wrong.
+func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer) []Peer {
+	out := make([]Peer, 0, len(found)+len(scanned))
 	seen := make(map[string]bool, len(found))
 	for _, p := range found {
 		if p.Fingerprint != "" {
@@ -257,7 +266,7 @@ func Browse(ctx context.Context, opts BrowseOptions) ([]Peer, error) {
 		})
 	}
 	// Add only what mDNS did not already describe: its entry carries the name.
-	for _, p := range scan.peers {
+	for _, p := range scanned {
 		if p.Fingerprint == "" || seen[p.Fingerprint] {
 			continue
 		}
@@ -276,7 +285,7 @@ func Browse(ctx context.Context, opts BrowseOptions) ([]Peer, error) {
 			ViaTailscale: p.ViaTailscale,
 		})
 	}
-	return out, nil
+	return out
 }
 
 // Request is an inbound transfer awaiting the user's accept/reject decision.
