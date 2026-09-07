@@ -1516,3 +1516,91 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
   font-family: SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
   color: var(--text-1);
 }
+
+/* ---- Phase 2 chrome -------------------------------------------------------
+   Status strip along the bottom of every view. Discoverability is stated here
+   permanently instead of hiding in a collapsed Settings block: it decides
+   whether anyone can find this machine, and burying it produced a "nearby share
+   is not working" report that turned out to be two devices with it switched off.
+   The theme toggle sits at the far left because it is set once and then never
+   touched again. */
+.status-strip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) var(--s6);
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.strip-theme {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-2);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.strip-theme:hover { border-color: var(--accent); color: var(--text-1); }
+.strip-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--success);
+}
+.strip-dot.off { background: var(--text-3); }
+.strip-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strip-sp { flex: 1; }
+.strip-link {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--r-sm);
+}
+.strip-link:hover { color: var(--accent-hover); }
+
+/* The update button carries its own notification: a dot, not a banner, so the
+   layout is identical whether or not an update is waiting. */
+.icon-btn.has-dot { position: relative; color: var(--accent); border-color: var(--accent-border); }
+.icon-btn.has-dot::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  border: 1.5px solid var(--bg-1);
+}
+
+/* Shai: a header launcher, not the portal's floating button. At this window
+   width the bottom-right corner belongs to the primary action. Marked plainly
+   unavailable, because a live-looking control that does nothing reads as a bug. */
+.icon-btn.shai-btn { position: relative; color: var(--accent); border-color: var(--accent-border); background: var(--accent-soft); }
+.icon-btn.shai-btn::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--warning);
+  border: 1.5px solid var(--bg-1);
+}

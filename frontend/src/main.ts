@@ -163,24 +163,44 @@ function render(): void {
 
 function header(): string {
   const s = state.status!;
+  // Update sits beside the account because both answer the same question: is this
+  // app of mine in good order? The dot IS the notification, so nothing appears or
+  // disappears and the row never reflows (design rule: no layout shift).
+  const upd = state.storeManaged
+    ? ''
+    : `<button class="icon-btn${state.update?.available ? ' has-dot' : ''}" id="check-update" title="${state.update?.available ? 'Update available' : 'Check for updates'}">⟳</button>`;
   return `<header class="modal-head">
     <div class="brand">${BRAND_SVG}<span>Share2Us</span></div>
     <div class="head-actions">
-      <button class="icon-btn" id="theme-toggle" title="Toggle light/dark">${state.theme === 'dark' ? '☀' : '☾'}</button>
-      ${state.storeManaged ? '' : `<button class="icon-btn" id="check-update" title="Check for updates">⟳</button>`}
       ${
         s.loggedIn
-          ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span><button class="btn-hdr" id="logout-btn">Logout</button>`
+          ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span>`
           : `<button class="btn-hdr" id="login-btn">Login</button>`
       }
+      <button class="icon-btn shai-btn" id="shai-open" title="Shai — coming soon">✦</button>
+      ${upd}
     </div>
   </header>`;
 }
 
-function discBanner(): string {
-  if (!state.status?.discoverable) return '';
-  const code = state.discCode ? `<b>Verify code ${escapeHtml(state.discCode)}</b>${state.discSafety ? ` · <span class="hint" title="Compare this before another device trusts this one">safety number <b>${escapeHtml(state.discSafety)}</b></span>` : ''}` : 'starting…';
-  return `<div class="disc-bar">📡 Discoverable — nearby devices can send you files. ${code}</div>`;
+
+
+// Persistent status strip along the bottom. Discoverability lives here rather
+// than inside a collapsed Settings block, because it decides whether anyone can
+// find this machine and hiding it produced a "nearby share is not working"
+// report that was nothing of the kind. The theme toggle sits at the far left:
+// it is set once and then never touched, so it does not deserve header space.
+function statusStrip(): string {
+  const on = !!state.status?.discoverable;
+  const code = on && state.discCode ? ` · code ${escapeHtml(state.discCode)}` : '';
+  const near = state.peers.filter((p) => !p.isBroadcast).length;
+  return `<div class="status-strip">
+    <button class="strip-theme" id="theme-toggle" title="Toggle light/dark">${state.theme === 'dark' ? '☀' : '☾'}</button>
+    <span class="strip-dot${on ? '' : ' off'}"></span>
+    <span class="strip-txt">${on ? `Discoverable${near ? ` · ${near} nearby` : ''}${code}` : 'Not discoverable'}</span>
+    <span class="strip-sp"></span>
+    <button class="strip-link" id="open-settings">Settings</button>
+  </div>`;
 }
 
 // ---- Home ------------------------------------------------------------------
@@ -201,7 +221,6 @@ function renderHome(): void {
   root.innerHTML = `<div class="modal">
     ${header()}
     ${updateBanner()}
-    ${discBanner()}
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
@@ -213,6 +232,7 @@ function renderHome(): void {
     ${state.trustPrompt && !state.requests.length ? trustCodeOverlay(state.trustPrompt) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
+    ${statusStrip()}
     ${buildStrip()}
   </div>`;
   wire();
@@ -311,6 +331,7 @@ function renderShare(): void {
       ${footerReason() ? `<div class="foot-reason">${escapeHtml(footerReason())}</div>` : ''}
       <button class="btn-primary" id="primary-btn" ${canPrimary() ? '' : 'disabled'}>${escapeHtml(primaryLabel())}</button>
     </footer>
+    ${statusStrip()}
     ${buildStrip()}
   </div>`;
   wire();
@@ -382,6 +403,7 @@ function renderBroadcast(): void {
       ${completed.length ? `<div class="grp-label" style="margin-top:18px">Downloaded · <span class="n">${completed.length}</span></div>${completed.map(doneRow).join('')}` : ''}
       ${!downloading.length && !completed.length ? `<div class="empty">Waiting for someone to download… they'll see it when they scan nearby.</div>` : ''}
     </div>
+    ${statusStrip()}
     ${buildStrip()}
   </div>`;
   wire();
@@ -531,6 +553,7 @@ function settingsBlock(): string {
       <label class="setting-row${state.storeManaged ? ' is-disabled' : ''}"><input type="checkbox" id="set-beta" ${state.updateChannel === 'beta' ? 'checked' : ''} ${state.storeManaged ? 'disabled' : ''} /><span class="setting-label">Get beta builds<span class="setting-help">${state.storeManaged ? 'The Microsoft Store manages updates for this install.' : 'Pre-release builds before they reach everyone. Also switches the s2u command line on this machine.'}</span></span></label>
       ${trustedBlock()}
       ${state.activity.length ? `<button class="btn-mini" id="clear-activity">Clear activity log</button>` : ''}
+      ${s.loggedIn ? `<div class="setting-row" style="justify-content:space-between"><span class="setting-label">Signed in as ${escapeHtml(s.email)}</span><button class="btn-hdr" id="logout-btn">Log out</button></div>` : ''}
     </div>
   </details>`;
 }
@@ -730,6 +753,12 @@ function wire() {
       findNearby();
     } catch (e) { toast(String(e)); }
   });
+  // Settings is one click from the strip now, wherever the user is looking.
+  on('#open-settings', 'click', () => {
+    const d = root.querySelector<HTMLDetailsElement>('details.settings');
+    if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+  });
+  on('#shai-open', 'click', () => toast('Shai is coming soon — it will do these tasks for you.'));
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
   disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) state.discCode = ''; render(); } catch { disc.checked = !disc.checked; } });
   const si = root.querySelector<HTMLSelectElement>('#scan-interval');
