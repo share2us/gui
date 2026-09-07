@@ -137,9 +137,6 @@ const state = {
   shareResult: null as { name: string; link: string; kind: string } | null,
 };
 
-const BRAND_SVG =
-  `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2fd6b6"/><stop offset="1" stop-color="#17a68c"/></linearGradient></defs><rect width="24" height="24" rx="6" fill="url(#g)"/><text x="12" y="16.5" font-family="system-ui,sans-serif" font-size="10" font-weight="700" text-anchor="middle" fill="#0b2b26">S2U</text></svg>`;
-
 const root = document.querySelector<HTMLDivElement>('#app')!;
 
 function applyTheme() { document.documentElement.setAttribute('data-theme', state.theme); }
@@ -191,15 +188,14 @@ function header(): string {
   // disappears and the row never reflows (design rule: no layout shift).
   const upd = state.storeManaged
     ? ''
-    : `<button class="icon-btn${state.update?.available ? ' has-dot' : ''}" id="check-update" title="${state.update?.available ? 'Update available' : 'Check for updates'}">⟳</button>`;
+    : `<button class="icon-btn upd-btn${state.update?.available ? ' has-dot' : ''}" id="check-update" aria-label="${state.update?.available ? 'Install the new version of Share2Us' : 'Check for a new version of Share2Us'}" title="${state.update?.available ? 'A new version of Share2Us is ready to install' : 'Check for a new version of Share2Us'}"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v7"/><path d="M5 6.5 8 9.5l3-3"/><path d="M2.5 11.5v1a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5v-1"/></svg></button>`;
   return `<header class="modal-head">
-    <div class="brand">${BRAND_SVG}<span>Share2Us</span></div>
+    ${
+      s.loggedIn
+        ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span>`
+        : `<button class="btn-hdr" id="login-btn">Login</button>`
+    }
     <div class="head-actions">
-      ${
-        s.loggedIn
-          ? `<span class="who" title="${escapeHtml(s.email)}">${escapeHtml(s.email)}</span>`
-          : `<button class="btn-hdr" id="login-btn">Login</button>`
-      }
       <button class="icon-btn shai-btn" id="shai-open" title="Shai — coming soon">✦</button>
       ${upd}
     </div>
@@ -302,7 +298,7 @@ function sectionNearby(): string {
   const body = rows.length
     ? rows.join('')
     : `<div class="empty">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on. Press ↻ to scan again.</div>`;
-  return `<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" title="Refresh (auto every ${state.scanInterval || 60}s)">↻</button></div>${body}`;
+  return `<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" aria-label="Scan for nearby devices again" title="Scan for nearby devices again (automatic every ${state.scanInterval || 60}s). This does not update the app.">↻</button></div>${body}`;
 }
 
 // Only rendered when something is waiting: an empty section would be a permanent
@@ -450,11 +446,18 @@ function destPicker(loggedIn: boolean): string {
     }
     ${
       state.peers.filter((p) => !p.isBroadcast).length
-        ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev${state.picked?.dest === p.dest ? ' picked' : ''}"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code">${escapeHtml(p.code)}</span>` : ''}<button class="ib${state.picked?.dest === p.dest ? ' on' : ''} pick-dev" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(p.name)}" title="${state.picked?.dest === p.dest ? 'Selected' : 'Select this device'}" style="margin-left:4px">${state.picked?.dest === p.dest ? '✓' : '→'}</button></div>`).join('')
-        : `<div class="hint">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — turn that on over there, then press ↻ on Home. Or paste its code below.</div>`
+        ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev${state.picked?.dest === p.dest ? ' picked' : ''}"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code" title="Verify code. Check it matches what that device shows, so you know it is really them. It is not something you type in here.">${escapeHtml(p.code)}</span>` : ''}<button class="ib${state.picked?.dest === p.dest ? ' on' : ''} pick-dev" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(p.name)}" title="${state.picked?.dest === p.dest ? 'Selected' : 'Select this device'}" style="margin-left:4px">${state.picked?.dest === p.dest ? '✓' : '→'}</button></div>`).join('')
+        : `<div class="hint">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — turn that on over there, then press ↻ on Home. Or type its address below, which also works when the two devices are on different networks and cannot see each other.</div>`
     }
-    <div class="or-line"><span>or a code</span></div>
-    <input id="net-dest" type="text" placeholder="s2u://…  or  192.168.1.5" value="${escapeHtml(state.netDest)}" />`;
+    <div class="or-line"><span>or enter its address</span></div>
+    <div class="addr-row">
+      <input id="net-dest" type="text" spellcheck="false" autocapitalize="off"
+             placeholder="192.168.1.5  or  s2u://…"
+             title="The device's address, or the s2u:// link it shows. The 6-digit verify code is for checking identity, not for finding a device."
+             value="${escapeHtml(state.netDest)}" />
+      <button id="net-dest-use" class="btn-mini" ${state.netDest.trim() ? '' : 'disabled'}
+              title="Use this address as the destination">Use</button>
+    </div>`;
   const bcBody = `
     <div style="font-size:12px;color:var(--text-2)">Who can download</div>
     <div class="modes">
@@ -651,12 +654,12 @@ function checkRow(id: string, label: string): string { return `<label class="set
 function settingsBlock(): string {
   const s = state.status!;
   return `<details class="settings"${'' /* closed by default */}>
-    <summary class="settings-summary">Settings</summary>
+    <summary class="settings-summary" aria-hidden="true" tabindex="-1">Settings</summary>
     <div class="settings-body">
       <label class="setting-row"><input type="checkbox" id="set-discoverable" ${s.discoverable ? 'checked' : ''} /><span class="setting-label">Discoverable on local network<span class="setting-help">Nearby devices can send you files — trusted ones land automatically, others ask.</span></span></label>
       <div class="chk2">Broadcast scan interval <select id="scan-interval">${[15, 30, 60, 120, 0].map((v) => `<option value="${v}" ${state.scanInterval === v ? 'selected' : ''}>${v === 0 ? 'manual only' : 'every ' + v + 's'}</option>`).join('')}</select></div>
       <label class="setting-row"><input type="checkbox" id="set-shell" ${s.shellInstalled ? 'checked' : ''} /><span class="setting-label">Right-click Share menu</span></label>
-      <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${s.autostartEnabled ? 'checked' : ''} ${s.canReceive ? '' : 'disabled'} /><span class="setting-label">Auto-receive files at login</span></label>
+      <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${s.autostartEnabled ? 'checked' : ''} ${s.canReceive ? '' : 'disabled'} /><span class="setting-label">Start Share2Us at login<span class="setting-help">So it is already running to receive files. Being found by other devices also needs “Discoverable on local network” above.</span></span></label>
       <label class="setting-row${state.storeManaged ? ' is-disabled' : ''}"><input type="checkbox" id="set-beta" ${state.updateChannel === 'beta' ? 'checked' : ''} ${state.storeManaged ? 'disabled' : ''} /><span class="setting-label">Get beta builds<span class="setting-help">${state.storeManaged ? 'The Microsoft Store manages updates for this install.' : 'Pre-release builds before they reach everyone. Also switches the s2u command line on this machine.'}</span></span></label>
       ${trustedBlock()}
       ${state.activity.length ? `<button class="btn-mini" id="clear-activity">Clear activity log</button>` : ''}
@@ -703,7 +706,7 @@ function canPrimary(): boolean {
 function footerReason(): string {
   if (!state.paths.length) return 'Add a file above to share.';
   if ((state.dest === 'public' || state.dest === 'private') && !state.status?.loggedIn) return 'Login to share to the cloud.';
-  if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter a code.';
+  if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter its address.';
   return '';
 }
 async function onPrimary() {
@@ -861,10 +864,28 @@ function wire() {
   on('.send-to', 'click', (e) => sendTo((e.currentTarget as HTMLElement).dataset.dest || ''));
   on('.dl-btn', 'click', (e) => { const fp = (e.currentTarget as HTMLElement).dataset.fp; const p = state.peers.find((x) => x.isBroadcast && x.fingerprint === fp); if (p) { state.dl = p; render(); } });
   on('.dest-opt', 'click', (e) => { state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest; render(); });
-  on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .mode', 'click', (e) => e.stopPropagation());
+  on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .mode, .dest-opt .addr-row', 'click', (e) => e.stopPropagation());
   on('.mode', 'click', (e) => { state.bcAccess = (e.currentTarget as HTMLElement).dataset.bcMode as any; render(); });
   const nd = root.querySelector<HTMLInputElement>('#net-dest');
-  nd?.addEventListener('input', () => (state.netDest = nd.value));
+  const ndUse = root.querySelector<HTMLButtonElement>('#net-dest-use');
+  // Enable the action in place rather than re-rendering: a render on every
+  // keystroke would take the focus out of the field being typed into.
+  nd?.addEventListener('input', () => {
+    state.netDest = nd.value;
+    if (ndUse) ndUse.disabled = !nd.value.trim();
+  });
+  // A typed address had no visible way to submit it. It was only ever consumed
+  // by the primary button at the far end of the form, so the field read as
+  // inert. Enter and an explicit Use both confirm it as the destination.
+  const useTyped = () => {
+    const dest = (nd?.value || '').trim();
+    if (!dest) return;
+    state.netDest = dest;
+    state.picked = { dest, name: dest };
+    render();
+  };
+  ndUse?.addEventListener('click', (e) => { e.stopPropagation(); useTyped(); });
+  nd?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') { e.preventDefault(); useTyped(); } });
   root.querySelector<HTMLDetailsElement>('.opt-card')?.addEventListener('toggle', (e) => (state.optionsOpen = (e.target as HTMLDetailsElement).open));
   // request approval overlay
   root.querySelector('#req-reject')?.addEventListener('click', () => respondRequest(false));

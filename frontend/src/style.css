@@ -194,13 +194,19 @@ body {
 .head-actions {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
   gap: 8px;
   min-width: 0;
 }
 .who {
   color: var(--text-2);
   font-size: 12px;
-  max-width: 160px;
+  /* The e-mail is the header's left anchor now that the wordmark is gone, so it
+     gets the room the brand used to take rather than a fixed 160px. */
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -219,6 +225,11 @@ body {
   font-size: 14px;
   line-height: 1;
   transition: border-color 0.12s, background 0.12s;
+}
+/* The update control carries an install arrow, not a circular one: a second
+   circular arrow beside Nearby's rescan read as the same button. */
+.upd-btn svg {
+  display: block;
 }
 .icon-btn:hover {
   border-color: var(--accent);
@@ -580,16 +591,17 @@ select:focus {
   border-top: 1px solid var(--border);
   padding-top: 14px;
 }
-.settings-summary {
-  color: var(--text-2);
-  cursor: pointer;
-  user-select: none;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 2px 0;
+/* Closed contributes no border either, so nothing hints at a control that is not
+   there. */
+.settings:not([open]) {
+  border-top: 0;
+  padding-top: 0;
 }
-.settings[open] .settings-summary {
-  margin-bottom: 12px;
+/* Settings has ONE entry point: the link in the status strip. This summary was a
+   second control with the same name sitting in the page, so it is no longer
+   shown. The <details> stays as the open/closed mechanism, driven by the strip. */
+.settings-summary {
+  display: none;
 }
 .settings-body {
   display: flex;
@@ -847,6 +859,25 @@ select:focus {
   font-weight: 600;
   flex: none;
 }
+/* The address field and its action sit on one row; the button is always present
+   and disabled when empty, so confirming an address never reflows the form. */
+.addr-row {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+}
+.addr-row input {
+  flex: 1;
+  min-width: 0;
+}
+.addr-row .btn-mini {
+  flex: none;
+}
+.addr-row .btn-mini[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .or-line {
   display: flex;
   align-items: center;
