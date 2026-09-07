@@ -790,6 +790,20 @@ function setupListeners() {
     if (state.view !== 'home') { state.view = 'home'; render(); }
   });
   const rt = (window as any).runtime;
+  // THIS CALL IS WHAT MAKES DROPPING WORK AT ALL. Wails registers its own
+  // dragover/dragleave/drop listeners only inside the FRONTEND runtime's
+  // OnFileDrop; the Go-side runtime.OnFileDrop (app.go) merely subscribes to the
+  // "wails:file-drop" event that those listeners cause to be emitted. With no
+  // frontend call, nothing was ever listening, no drop was ever resolved, and
+  // the Go callback could never fire — which is exactly what "drag and drop does
+  // nothing, but Choose files works" looked like.
+  // Passing true keeps Wails' drop-target gating, which our CSS now satisfies
+  // (see --wails-drop-target in style.css).
+  rt?.OnFileDrop?.((_x: number, _y: number, paths: string[]) => {
+    addPaths(paths || []); state.view = 'share'; render();
+  }, true);
+  // Kept: the Go side emits this for the same drop. addPaths dedupes, so the two
+  // paths cannot double-add a file.
   rt?.EventsOn?.('files-dropped', (paths: string[]) => { addPaths(paths || []); state.view = 'share'; render(); });
   rt?.EventsOn?.('lan-request', (r: any) => {
     if (!r?.id) return;
