@@ -231,7 +231,7 @@ function feed(): string {
   }
   for (const a of state.activity) rows.push(logRow(a));
   if (!rows.length) {
-    return `<div class="empty">Nothing yet. Press ↻ to scan for nearby devices, or + Share a file.</div>`;
+    return `<div class="empty">Nothing yet. Press ↻ to scan — a nearby device shows up only while Share2Us is open on it with “Discoverable on local network” turned on.</div>`;
   }
   return rows.join('');
 }
@@ -324,12 +324,20 @@ function destPicker(loggedIn: boolean): string {
     </div>`;
   const guest = `<span class="free">guest</span>`;
   const need = `<span class="need">login required</span>`;
+  // Asked here rather than buried in Settings, because this is the moment the
+  // feature makes sense: the user is looking for nearby devices, so "you have to
+  // be discoverable too, and so do they" lands instead of sounding like a setting.
+  const discAsk = state.status?.discoverable
+    ? ''
+    : `<div class="warn-line">This device is not discoverable, so other devices cannot see it or send to you.
+         <button class="btn-mini" id="dest-make-disc">Make discoverable</button></div>`;
   const nearbyBody = `
     <div style="font-size:12px;color:var(--muted)">Send straight to a device on your LAN</div>
+    ${discAsk}
     ${
       state.peers.filter((p) => !p.isBroadcast).length
         ? state.peers.filter((p) => !p.isBroadcast).map((p) => `<div class="mini-dev"><span class="n"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.addr)}</span>${p.code ? `<span class="tag code">${escapeHtml(p.code)}</span>` : ''}<button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" title="Send" style="margin-left:4px">→</button></div>`).join('')
-        : `<div class="hint">No devices found. Press ↻ on Home, or use a code below.</div>`
+        : `<div class="hint">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — turn that on over there, then press ↻ on Home. Or paste its code below.</div>`
     }
     <div class="or-line"><span>or a code</span></div>
     <input id="net-dest" type="text" placeholder="s2u://…  or  192.168.1.5" value="${escapeHtml(state.netDest)}" />`;
@@ -711,6 +719,17 @@ function wire() {
   on('.copy-link', 'click', (e) => { copy((e.currentTarget as HTMLElement).dataset.link || ''); toast('Link copied'); });
   on('#build-strip', 'click', () => { if (state.buildVersion) { copy(state.buildVersion); toast('Version copied'); } });
   // settings
+  // One tap from the send flow, so the user never has to go hunting in Settings
+  // for a thing they were just told they need.
+  on('#dest-make-disc', 'click', async () => {
+    try {
+      await backend().SetDiscoverable(true);
+      if (state.status) state.status.discoverable = true;
+      toast('Discoverable — nearby devices can now see this one');
+      render();
+      findNearby();
+    } catch (e) { toast(String(e)); }
+  });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
   disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) state.discCode = ''; render(); } catch { disc.checked = !disc.checked; } });
   const si = root.querySelector<HTMLSelectElement>('#scan-interval');
