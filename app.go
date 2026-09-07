@@ -996,6 +996,11 @@ func (a *App) CheckUpdate() update.Info {
 // "beta"). It is the CLI's setting too: both read update_channel from the shared
 // cli-core config.json, so `s2u update --channel beta` and this toggle are one
 // machine-wide choice. Store-managed installs always report stable.
+// BuildVersion is the release stamp this binary was built with, shown in the
+// window footer so a user can report exactly what they are running. "dev" for a
+// local build that CI never stamped.
+func (a *App) BuildVersion() string { return buildVersion }
+
 func (a *App) UpdateChannel() string {
 	if update.IsStoreManaged() {
 		return update.ChannelStable

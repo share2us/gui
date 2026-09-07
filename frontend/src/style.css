@@ -1400,3 +1400,26 @@ button.files-add:hover { border-color: var(--accent); color: var(--text); }
 .trust-error { color: var(--danger, #d33); }
 .chk-trust.trust-mode { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .chk-trust.trust-mode select { flex: 1; min-width: 0; }
+
+/* Build stamp, pinned to the bottom of the window frame in every view. Fixed
+   height and always rendered (even while the value is still loading) so it can
+   never appear late and push the frame around. */
+.build-strip {
+  flex: 0 0 auto;
+  padding: 5px 18px 7px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+  cursor: pointer;
+  -webkit-user-select: text;
+  user-select: text;
+  transition: color .12s;
+}
+.build-strip:hover { color: var(--text); }
+.build-ver {
+  font-family: SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
+  color: var(--text);
+}
