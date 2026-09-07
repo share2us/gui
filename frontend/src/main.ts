@@ -71,7 +71,8 @@ interface AppBackend {
   DiscardIncoming(id: string): Promise<void>;
   SetUpdateChannel(channel: string): Promise<void>;
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
-  LanBrowse(): Promise<LanPeer[]>;
+  LanBrowse(deep: boolean): Promise<LanPeer[]>;
+  LocalAddresses(): Promise<string[]>;
   SetDiscoverable(on: boolean): Promise<void>;
   RespondLanRequest(id: string, accept: boolean): Promise<void>;
   TrustDevice(fingerprint: string, name: string, mode: string): Promise<TrustChallenge>;
@@ -105,6 +106,8 @@ const state = {
   trusted: [] as TrustedDevice[],
   bc: null as BroadcastState | null, // live broadcast
   discCode: '' as string,
+  discAddr: '' as string, // this device's own ip:port, so the user can match it against a device list without hunting for it
+  localAddrs: [] as string[], // every IPv4 this machine has, for the strip's tooltip
   discSafety: '' as string, // this device's safety number (compare before trusting it from elsewhere)
   clip: null as ClipSuggestion | null,
   theme: 'dark' as 'dark' | 'light',
@@ -154,6 +157,7 @@ async function boot() {
     state.status = status;
     state.paths = paths || [];
     state.scanInterval = await backend().GetScanInterval().catch(() => 60);
+    state.localAddrs = await backend().LocalAddresses().catch(() => []) || [];
     state.storeManaged = await backend().IsStoreManaged().catch(() => false);
     state.updateChannel = await backend().UpdateChannel().catch(() => 'stable');
     state.buildVersion = await backend().BuildVersion().catch(() => '');
@@ -215,11 +219,15 @@ function header(): string {
 function statusStrip(): string {
   const on = !!state.status?.discoverable;
   const code = on && state.discCode ? ` · code ${escapeHtml(state.discCode)}` : '';
+  // Show this device's own address next to its code. Both are for the same job —
+  // telling the other person which entry in their list is you — and the address
+  // was the half they had to go and find in the operating system.
+  const addr = on && state.discAddr ? ` · ${escapeHtml(state.discAddr)}` : '';
   const near = state.peers.filter((p) => !p.isBroadcast).length;
   return `<div class="status-strip">
     <button class="strip-theme" id="theme-toggle" title="Toggle light/dark">${state.theme === 'dark' ? '☀' : '☾'}</button>
     <span class="strip-dot${on ? '' : ' off'}"></span>
-    <span class="strip-txt">${on ? `Discoverable${near ? ` · ${near} nearby` : ''}${code}` : 'Not discoverable'}</span>
+    <span class="strip-txt" ${on && state.discAddr ? `title="This device is ${escapeHtml(state.discAddr)}, verify code ${escapeHtml(state.discCode)}. Give either to the person sending to you.${state.localAddrs.length > 1 ? ` This machine also answers on ${escapeHtml(state.localAddrs.slice(1).join(', '))}.` : ''}"` : ''}>${on ? `Discoverable${addr}${near ? ` · ${near} nearby` : ''}${code}` : 'Not discoverable'}</span>
     <span class="strip-sp"></span>
     <button class="strip-link" id="open-settings">Settings</button>
   </div>`;
@@ -301,7 +309,7 @@ function sectionNearby(): string {
   const body = rows.length
     ? rows.join('')
     : `<div class="empty">No devices found. A device appears here only while Share2Us is open on it <b>and</b> its “Discoverable on local network” setting is on — check that over there first, then press ↻. Devices are looked for by name and by probing this network directly, so a device on the same network should appear even if its name does not.</div>`;
-  return `<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" aria-label="Scan for nearby devices again" title="Scan for nearby devices again (automatic every ${state.scanInterval || 60}s). This does not update the app.">↻</button></div>${body}`;
+  return `<div class="sec-head"><b>Nearby</b><button class="refresh" id="nearby-find" aria-label="Scan for nearby devices again" title="Look for nearby devices now, checking every address on this network. The automatic check every ${state.scanInterval || 60}s is a lighter one. This does not update the app.">↻</button></div>${body}`;
 }
 
 // Only rendered when something is waiting: an empty section would be a permanent
@@ -360,7 +368,7 @@ function nearbyRow(p: LanPeer): string {
     <div class="line" ${p.viaScan ? 'title="Found by probing the network directly. This device is reachable, but its name did not arrive, which usually means multicast (mDNS) is blocked between you."' : ''}>${label}${
       p.code ? ` <span class="tag code">${escapeHtml(p.code)}</span>` : ''
     }</div>
-    <div class="acts"><button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" title="Send to this device">→</button></div>
+    <div class="acts"><button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(p.viaScan ? p.addr : p.name)}" title="Choose files to send to this device">→</button></div>
   </div>`;
 }
 
@@ -728,7 +736,9 @@ async function onPrimary() {
 
 async function sendTo(dest: string) {
   const outcomes = await backend().LanSend(state.paths, dest, '').catch((e) => [{ path: '', ok: false, error: String(e) } as ShareOutcome]);
-  const ok = outcomes.every((o) => o.ok);
+  // No outcomes means nothing was attempted. every() on an empty array is true,
+  // which is how a send of nothing used to report success.
+  const ok = outcomes.length > 0 && outcomes.every((o) => o.ok);
   state.view = 'home';
   state.paths = [];
   state.picked = null;
@@ -804,10 +814,14 @@ async function refreshIncoming() { try { state.incoming = (await backend().Incom
 async function refreshActivity() { try { state.activity = (await backend().ActivityLog()) || []; } catch { /* */ } }
 async function loadTrusted() { try { state.trusted = (await backend().ListTrusted()) || []; render(); } catch { /* */ } }
 let scanTimer = 0;
-async function findNearby(quiet = false) {
+// deep = sweep the whole subnet. That is what pressing refresh means; the timer
+// asks for the cheap pass, which re-probes only devices already seen. A desktop
+// app that connected to every address on the network once a minute would look
+// exactly like a port scanner to endpoint security, and would be one.
+async function findNearby(quiet = false, deep = true) {
   if (state.browsing) return;
   state.browsing = true; if (!quiet) render();
-  try { state.peers = (await backend().LanBrowse()) || []; } catch { /* keep last list */ }
+  try { state.peers = (await backend().LanBrowse(deep)) || []; } catch { /* keep last list */ }
   state.browsing = false;
   // Repaint where the result is actually on screen. Home always; the share modal
   // too when its device list is showing, because that list arrives AFTER the
@@ -827,7 +841,7 @@ function startScanTimer() {
   if (scanTimer) { clearInterval(scanTimer); scanTimer = 0; }
   const sec = state.scanInterval;
   if (!sec || sec <= 0) return;
-  scanTimer = window.setInterval(() => { if (state.view === 'home') findNearby(true); }, sec * 1000);
+  scanTimer = window.setInterval(() => { if (state.view === 'home') findNearby(true, false); }, sec * 1000);
 }
 async function checkForUpdate() { if (state.storeManaged) return; try { const info = await backend().CheckUpdate(); if (info?.available) { state.update = info; render(); } } catch { /* */ } }
 async function checkClipboard() {
@@ -867,7 +881,27 @@ function wire() {
       render();
     }),
   );
-  on('.send-to', 'click', (e) => sendTo((e.currentTarget as HTMLElement).dataset.dest || ''));
+  // From Home there are no files staged yet, so this used to call LanSend with an
+  // empty list: nothing was sent, and an empty result counts as "every transfer
+  // succeeded", so it reported nothing either. Ask for the files first, then hand
+  // the user the send flow with this device already chosen.
+  on('.send-to', 'click', async (e) => {
+    const el = e.currentTarget as HTMLElement;
+    const dest = el.dataset.dest || '';
+    const name = el.dataset.name || dest;
+    if (!dest) return;
+    if (!state.paths.length) {
+      let picked: string[] = [];
+      try { picked = (await backend().PickFiles()) || []; } catch (err) { toast(String(err)); return; }
+      if (!picked.length) return; // cancelled: not an error, and not a send
+      addPaths(picked);
+    }
+    state.sendMode = 'device';
+    state.dest = 'nearby';
+    state.picked = { dest, name };
+    state.view = 'share';
+    render();
+  });
   on('.dl-btn', 'click', (e) => { const fp = (e.currentTarget as HTMLElement).dataset.fp; const p = state.peers.find((x) => x.isBroadcast && x.fingerprint === fp); if (p) { state.dl = p; render(); } });
   on('.dest-opt', 'click', (e) => { state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest; render(); });
   on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .mode, .dest-opt .addr-row', 'click', (e) => e.stopPropagation());
@@ -988,7 +1022,7 @@ function wire() {
   on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
   on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
-  disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) state.discCode = ''; render(); } catch { disc.checked = !disc.checked; } });
+  disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) { state.discCode = ''; state.discAddr = ''; } render(); } catch { disc.checked = !disc.checked; } });
   const si = root.querySelector<HTMLSelectElement>('#scan-interval');
   si?.addEventListener('change', async () => { state.scanInterval = Number(si.value); try { await backend().SetScanInterval(state.scanInterval); } catch { /* */ } startScanTimer(); });
   wireToggle('set-shell', (o) => backend().SetShellIntegration(o));
@@ -1107,7 +1141,7 @@ function setupListeners() {
   });
   rt?.EventsOn?.('lan-recv-done', () => { refreshActivity().then(render); });
   rt?.EventsOn?.('incoming-changed', () => { refreshIncoming().then(render); });
-  rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); state.discSafety = String(d?.safety || ''); render(); } });
+  rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); state.discSafety = String(d?.safety || ''); state.discAddr = String(d?.address || ''); render(); } });
   rt?.EventsOn?.('lan-bc-conn', async () => { try { state.bc = await backend().BroadcastStats(); if (state.view === 'broadcast' || (state.view === 'home')) render(); } catch { /* */ } });
   window.addEventListener('focus', () => checkClipboard());
 }

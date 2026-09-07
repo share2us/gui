@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -56,6 +57,8 @@ type App struct {
 	lanRecv *lan.Receiver // an active one-shot local-network receiver, if any
 
 	discMu       sync.Mutex
+	knownHosts   map[string]bool      // addresses seen as devices, for the cheap re-probe
+	lastDeepScan time.Time            // when the subnet was last swept
 	discRecv     *lan.Receiver        // persistent discoverable serve loop, if on
 	discoverable bool                 // whether we are advertising + serving
 	reqs         map[string]chan bool // pending approval prompts, by id
@@ -484,10 +487,76 @@ func (a *App) LanStopReceive() {
 
 // LanBrowse lists nearby Share2Us devices that are currently discoverable, for
 // the "nearby devices" picker in the Send flow.
-func (a *App) LanBrowse() ([]lan.Peer, error) {
-	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Second)
+//
+// deep asks for a full sweep of the local subnet. That is a person pressing
+// refresh; the timer that runs in the background passes false and re-probes only
+// devices already seen, so the app never behaves like a port scanner on a loop.
+// A sweep still happens unattended, but rarely enough to be unremarkable.
+func (a *App) LanBrowse(deep bool) ([]lan.Peer, error) {
+	a.discMu.Lock()
+	if !deep && time.Since(a.lastDeepScan) > deepScanEvery {
+		deep = true // a new device would otherwise never appear on its own
+	}
+	known := make([]string, 0, len(a.knownHosts))
+	for h := range a.knownHosts {
+		known = append(known, h)
+	}
+	if deep {
+		a.lastDeepScan = time.Now()
+	}
+	a.discMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
 	defer cancel()
-	return lan.Browse(ctx, 1500*time.Millisecond)
+	peers, err := lan.Browse(ctx, lan.BrowseOptions{Timeout: 1500 * time.Millisecond, Deep: deep, Known: known})
+	if err != nil {
+		return peers, err
+	}
+	// Remember where devices were found so the cheap pass can keep them listed.
+	a.discMu.Lock()
+	if a.knownHosts == nil {
+		a.knownHosts = map[string]bool{}
+	}
+	for _, p := range peers {
+		if h, _, e := net.SplitHostPort(p.Addr); e == nil && h != "" {
+			a.knownHosts[h] = true
+		}
+	}
+	a.discMu.Unlock()
+	return peers, nil
+}
+
+// deepScanEvery bounds how long the app can go without a full sweep. Short
+// enough that a device switched on is found without anyone pressing anything;
+// long enough that it is not a recurring pattern on the network.
+const deepScanEvery = 10 * time.Minute
+
+// LocalAddresses lists this machine's own IPv4 addresses, most LAN-reachable
+// first. The status strip shows one; this is for the case a machine has several
+// (Ethernet and Wi-Fi, or a VPN), where the person reading a device list needs to
+// know which of them is theirs without going to look it up in the OS.
+func (a *App) LocalAddresses() []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var lan, other []string
+	for _, ad := range addrs {
+		ipNet, ok := ad.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipNet.IP.To4()
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		if ip.IsPrivate() {
+			lan = append(lan, ip.String())
+		} else {
+			other = append(other, ip.String())
+		}
+	}
+	return append(lan, other...)
 }
 
 // SetDiscoverable turns this device's discoverable receiver on or off. While on,
