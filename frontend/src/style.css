@@ -1047,6 +1047,16 @@ select:focus {
 .btn-accept:hover {
   background: var(--accent-hover);
 }
+/* Destructive confirm. Same shape as the primary action so it is obviously the
+   button that acts, but never the accent colour — the accent means "the safe
+   thing to press" everywhere else in the app. */
+.btn-accept.danger {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.btn-accept.danger:hover {
+  filter: brightness(1.08);
+}
 
 /* ── Discoverable status banner + verify code ──────────────────────────── */
 .disc-bar {

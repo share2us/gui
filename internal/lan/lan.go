@@ -201,27 +201,26 @@ func Browse(ctx context.Context, opts BrowseOptions) ([]Peer, error) {
 	go func() {
 		so := lanshare.ScanOptions{Timeout: 400 * time.Millisecond}
 		if !opts.Deep {
-			// Nothing to re-probe means nothing to do: do not fall through to a
-			// sweep, which is what an empty Targets list would otherwise mean.
-			if len(opts.Known) == 0 {
-				scanCh <- scanResult{nil, nil}
-				return
-			}
 			var targets []netip.Addr
 			for _, h := range opts.Known {
 				if a, err := netip.ParseAddr(h); err == nil {
 					targets = append(targets, a)
 				}
 			}
-			if len(targets) == 0 {
-				scanCh <- scanResult{nil, nil}
-				return
-			}
 			so.Targets = targets
-			// Enumerating tailnet peers runs the tailscale CLI. Keep that off the
-			// routine path; the deep pass still picks them up.
-			no := false
-			so.IncludeTailscale = &no
+			// Tailnet peers ARE enumerated on the routine pass. They come from
+			// one `tailscale status` call rather than a sweep, so they cost
+			// nothing like a subnet probe — and leaving them to the deep pass
+			// meant a Tailscale device stayed invisible for up to ten minutes,
+			// which read as "the app cannot see my tailnet devices at all".
+			yes := true
+			so.IncludeTailscale = &yes
+			// Nothing known to re-probe: enumerate the tailnet and stop there. An
+			// empty Targets list otherwise means "sweep every local subnet", which
+			// is the port-scan shape this pass exists to avoid.
+			if len(targets) == 0 {
+				so.SkipLocalSubnets = true
+			}
 		}
 		// The tailnet is enumerated rather than swept, so a deep pass stays cheap
 		// even though it reaches devices no local broadcast ever could.

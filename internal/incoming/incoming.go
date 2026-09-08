@@ -240,13 +240,22 @@ func Claim(id, dest string) error {
 	return forget(id)
 }
 
-// Discard deletes a staged file the user does not want.
+// Discard drops an arrival the user does not want.
+//
+// A staged file is deleted: nobody claimed it, and it only exists because it was
+// waiting for a decision. A FILED one is not — it is the user's own file, in the
+// folder they chose, and it is listed here only so a one-off can still be sent
+// elsewhere. Deleting that would destroy a file the user had already saved, from
+// a control that reads as "remove this from the list". It is forgotten instead
+// and left alone on disk, which is the same carve-out Sweep makes.
 func Discard(id string) error {
 	it, ok := Get(id)
 	if !ok {
 		return nil
 	}
-	_ = os.Remove(it.File)
+	if !it.Filed {
+		_ = os.Remove(it.File)
+	}
 	return forget(id)
 }
 

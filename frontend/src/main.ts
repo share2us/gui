@@ -122,6 +122,7 @@ const state = {
   discCode: '' as string,
   discAddr: '' as string, // this device's own ip:port, so the user can match it against a device list without hunting for it
   localAddrs: [] as string[],
+  confirmDrop: null as { id: string; name: string } | null, // deleting an unsaved arrival is not undoable, so it is confirmed
   netProfile: null as NetProfile | null, // every IPv4 this machine has, for the strip's tooltip
   discSafety: '' as string, // this device's safety number (compare before trusting it from elsewhere)
   clip: null as ClipSuggestion | null,
@@ -327,6 +328,7 @@ function renderHome(): void {
     ${state.trustPrompt && !state.requests.length ? trustCodeOverlay(state.trustPrompt) : ''}
     ${state.peerPrompt ? peerConfirmOverlay(state.peerPrompt) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
+    ${state.confirmDrop ? dropConfirmOverlay(state.confirmDrop) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
     ${shaiPanel()}
     ${statusStrip()}
@@ -385,10 +387,14 @@ function sectionIncoming(): string {
         ? ` · saved to ${escapeHtml(f.savedTo || 'your folder')}`
         : ` · from ${escapeHtml(f.from)}`;
       const act = f.filed ? 'Save another copy somewhere else' : 'Save to this device';
+      // The ✕ means two different things, so it says which. On a waiting file it
+      // deletes the copy nobody has saved yet; on a filed one the file is already
+      // the user's, in the folder they chose, so it only leaves this list.
+      const drop = f.filed ? 'Remove from this list (your saved file is kept)' : 'Delete this file without saving it';
       return `<div class="item inc-row" data-id="${escapeHtml(f.id)}" title="${act}">
       <div class="ico">${f.filed ? '✓' : '📥'}</div>
       <div class="line"><b>${escapeHtml(f.name)}</b> <span class="meta">· ${fmtBytes(f.size)}${where}</span></div>
-      <div class="acts"><button class="ib save-incoming" data-id="${escapeHtml(f.id)}" title="${act}">⤓</button></div>
+      <div class="acts"><button class="ib save-incoming" data-id="${escapeHtml(f.id)}" title="${act}">⤓</button><button class="ib drop-incoming" data-id="${escapeHtml(f.id)}" data-filed="${f.filed ? '1' : ''}" data-name="${escapeHtml(f.name)}" title="${drop}" aria-label="${drop}">✕</button></div>
     </div>`;
     })
     .join('');
@@ -644,6 +650,24 @@ function requestOverlay(r: LanRequest): string {
     <div class="overlay-body"><b>${escapeHtml(r.name)}</b> <span class="hint">(${fmtBytes(r.size)})</span><div class="hint">${who} ${verb}</div></div>
     ${trustBox}
     <div class="overlay-actions"><button class="btn-hdr" id="req-reject">Decline</button><button class="btn-accept" id="req-accept">Accept</button></div>
+  </div></div>`;
+}
+
+// Confirm deleting an arrival nobody has saved yet.
+//
+// An overlay rather than an inline warning strip: the ✕ sits beside the button
+// that saves, so a misfire is likely, and growing a line inside the list would
+// reflow every row under it (design rule: no layout shift). Default is the safe
+// side — Keep is the primary action, and Delete is styled as the destructive one.
+function dropConfirmOverlay(d: { id: string; name: string }): string {
+  return `<div class="overlay"><div class="overlay-card">
+    <div class="overlay-title">Delete without saving?</div>
+    <div class="overlay-body"><b>${escapeHtml(d.name)}</b>
+      <div class="hint">It has not been saved anywhere yet, so this deletes the only copy. There is no undo.</div></div>
+    <div class="overlay-actions">
+      <button class="btn-hdr" id="drop-cancel">Keep it</button>
+      <button class="btn-accept danger" id="drop-confirm">Delete</button>
+    </div>
   </div></div>`;
 }
 
@@ -1009,6 +1033,36 @@ async function stopBroadcast() {
 
 // ---- Data refresh ----------------------------------------------------------
 
+// Ask where a just-arrived file should go, the moment it lands.
+//
+// Accepting a transfer and then having to find a ⤓ button was the confusing part
+// of this flow: the user had already said yes, so nothing more appeared to be
+// required, and the file looked like it had gone nowhere.
+//
+// Serialised, because two files arriving together would otherwise race to open
+// two native dialogs and the second would be answered for a file the user was
+// not looking at. A prompt is skipped entirely once a folder is remembered — the
+// backend files those directly and never emits this.
+let savePromptBusy = false;
+const savePromptQueue: string[] = [];
+async function queueSavePrompt(id: string) {
+  if (!id) return;
+  savePromptQueue.push(id);
+  if (savePromptBusy) return;
+  savePromptBusy = true;
+  try {
+    while (savePromptQueue.length) {
+      const next = savePromptQueue.shift();
+      if (!next) continue;
+      // Cancelling leaves the file waiting in the list, exactly as before, so
+      // this is never the only chance to save it.
+      await saveIncoming(next);
+    }
+  } finally {
+    savePromptBusy = false;
+  }
+}
+
 // Save a waiting arrival. The native dialog cannot carry a "remember this"
 // checkbox, so the offer comes after the save, once, and only while no folder is
 // set — asking every time would be nagging.
@@ -1023,6 +1077,26 @@ async function saveIncoming(id: string) {
     } else {
       toast('Saved');
     }
+    render();
+  } catch (e) { toast(String(e)); }
+}
+
+// Discard a waiting arrival, or drop a filed one from the list.
+//
+// Deleting an unsaved file is not undoable and the button is one pixel from the
+// one that saves it, so that half asks first. Removing a filed entry is not
+// destructive (the file stays where the user saved it) and does not.
+async function dropIncoming(id: string, filed: boolean, name: string) {
+  if (!id) return;
+  if (!filed) { state.confirmDrop = { id, name }; render(); return; }
+  await discardIncoming(id);
+}
+
+async function discardIncoming(id: string) {
+  state.confirmDrop = null;
+  try {
+    await backend().DiscardIncoming(id);
+    await refreshIncoming();
     render();
   } catch (e) { toast(String(e)); }
 }
@@ -1236,6 +1310,14 @@ function wire() {
       saveIncoming(el.dataset.id || '');
     }),
   );
+  on('#drop-cancel', 'click', () => { state.confirmDrop = null; render(); });
+  on('#drop-confirm', 'click', () => { if (state.confirmDrop) discardIncoming(state.confirmDrop.id); });
+  root.querySelectorAll<HTMLElement>('.drop-incoming').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation(); // the row saves on click; ✕ must not also save
+      dropIncoming(el.dataset.id || '', !!el.dataset.filed, el.dataset.name || 'that file');
+    }),
+  );
   // The whole row, as the plan promised — not just the icon.
   root.querySelectorAll<HTMLElement>('.inc-row').forEach((el) =>
     el.addEventListener('click', () => saveIncoming(el.dataset.id || '')),
@@ -1377,6 +1459,7 @@ function setupListeners() {
   // Escape closes an open overlay, or backs a modal out to Home.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (state.confirmDrop) { state.confirmDrop = null; render(); return; }
     if (state.shareResult) { state.shareResult = null; render(); return; }
     if (state.dl) { state.dl = null; render(); return; }
     if (state.requests.length) { respondRequest(false); return; }
@@ -1405,6 +1488,7 @@ function setupListeners() {
   });
   rt?.EventsOn?.('lan-recv-done', () => { refreshActivity().then(render); });
   rt?.EventsOn?.('incoming-changed', () => { refreshIncoming().then(render); });
+  rt?.EventsOn?.('incoming-arrived', (d: any) => { queueSavePrompt(String(d?.id || '')); });
   rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); state.discSafety = String(d?.safety || ''); state.discAddr = String(d?.address || ''); render(); } });
   rt?.EventsOn?.('lan-bc-conn', async () => { try { state.bc = await backend().BroadcastStats(); if (state.view === 'broadcast' || (state.view === 'home')) render(); } catch { /* */ } });
   window.addEventListener('focus', () => checkClipboard());
