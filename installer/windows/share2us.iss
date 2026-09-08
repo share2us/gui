@@ -78,6 +78,15 @@ Name: "autoreceive"; Description: "Receive files sent to this device (start at l
 Source: "{#DistDir}\{#GuiExe}"; DestDir: "{app}"; Components: gui; Flags: ignoreversion
 ; skipifsourcedoesntexist: build the installer even if the CLI binary wasn't bundled.
 Source: "{#DistDir}\{#CliExe}"; DestDir: "{app}"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
+; The licence ships NEXT TO the app, not as a click-through page. Share2Us is
+; GPL-3.0-only, and the GPL needs no acceptance to USE the software — presenting
+; it as an EULA you must agree to before installing misrepresents what it is.
+; MUI_PAGE_LICENSE stays off for that reason; this is the honest alternative.
+; Named .txt so it opens on a double-click; Windows will not open an
+; extensionless file. Paths are relative to THIS file's directory (no SourceDir
+; is set), so ..\..\ is the repo root.
+Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; DestName: "THIRD-PARTY-NOTICES.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Share2Us"; Filename: "{app}\{#GuiExe}"; Components: gui
