@@ -263,16 +263,26 @@ function header(): string {
 function statusStrip(): string {
   const on = !!state.status?.discoverable;
   const code = on && state.discCode ? ` · code ${escapeHtml(state.discCode)}` : '';
-  // Show this device's own address next to its code. Both are for the same job —
-  // telling the other person which entry in their list is you — and the address
-  // was the half they had to go and find in the operating system.
-  const addr = on && state.discAddr ? ` · ${escapeHtml(state.discAddr)}` : '';
   const near = state.peers.filter((p) => !p.isBroadcast).length;
+  // This device's own address, in a slot of its own and shown WHATEVER the state.
+  //
+  // It used to live inside the sentence beside "Discoverable", which meant the
+  // one question it answers — standing at a second laptop, which of these two
+  // machines is 192.168.15.114? — could only be answered while discoverable was
+  // already on. Turning it off, the moment you might be checking why the other
+  // laptop cannot see you, took the address away with it. It falls back to the
+  // interface address when there is no listener to report a port.
+  const self = state.discAddr || state.localAddrs[0] || '';
+  const alsoOn = state.localAddrs.length > 1 ? ` This machine also answers on ${escapeHtml(state.localAddrs.slice(1).join(', '))}.` : '';
+  const selfTitle = self
+    ? `This device is ${escapeHtml(self)}${on && state.discCode ? `, verify code ${escapeHtml(state.discCode)}` : ''}. Give it to the person sending to you.${alsoOn}`
+    : 'This device has no network address right now.';
   return `<div class="status-strip">
     <button class="strip-theme" id="theme-toggle" title="Toggle light/dark">${state.theme === 'dark' ? '☀' : '☾'}</button>
     <span class="strip-dot${on ? '' : ' off'}"></span>
-    <span class="strip-txt" ${on && state.discAddr ? `title="This device is ${escapeHtml(state.discAddr)}, verify code ${escapeHtml(state.discCode)}. Give either to the person sending to you.${state.localAddrs.length > 1 ? ` This machine also answers on ${escapeHtml(state.localAddrs.slice(1).join(', '))}.` : ''}"` : ''}>${on ? `Discoverable${addr}${near ? ` · ${near} nearby` : ''}${code}` : 'Not discoverable'}</span>
+    <span class="strip-txt">${on ? `Discoverable${near ? ` · ${near} nearby` : ''}${code}` : 'Not discoverable'}</span>
     <span class="strip-sp"></span>
+    <span class="strip-self" title="${selfTitle}">${self ? `This device ${escapeHtml(self)}` : 'No address'}</span>
     <button class="strip-link" id="open-settings">Settings</button>
   </div>`;
 }

@@ -1708,6 +1708,15 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 .strip-dot.off { background: var(--text-3); }
 .strip-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .strip-sp { flex: 1; }
+/* This device's own address. Tabular figures so it does not jitter as the last
+   octet changes width, and never shrunk by the flexbox — it is the one thing in
+   this strip somebody is actively reading off the screen. */
+.strip-self {
+  flex: none;
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .strip-link {
   flex: none;
   border: none;
