@@ -27,6 +27,7 @@ import (
 	"github.com/share2us/gui/internal/clip"
 	"github.com/share2us/gui/internal/core"
 	"github.com/share2us/gui/internal/incoming"
+	"github.com/share2us/gui/internal/knownpeers"
 	"github.com/share2us/gui/internal/lan"
 	"github.com/share2us/gui/internal/netprofile"
 	"github.com/share2us/gui/internal/prefs"
@@ -549,6 +550,49 @@ func (a *App) NetworkProfile() netprofile.Status { return netprofile.Current() }
 func (a *App) OpenNetworkSettings() error {
 	return netprofile.OpenSettings()
 }
+
+// PeerCheck reports whether a nearby device is presenting the certificate it
+// presented last time (W-M4).
+//
+// The fingerprint a device advertises over mDNS is attacker-choosable, and the
+// sender pins exactly that, so "verified" can mean "verified as the impostor".
+// The verify code is the defence, but only if somebody compares it, and asking on
+// every send teaches people to click through. So the app asks once per device and
+// then only when something changes.
+//
+// It records nothing — PeerRemember is called after the user accepts, never on
+// sight, or an impostor seen once would be silently familiar the second time.
+func (a *App) PeerCheck(name, fingerprint string) PeerCheckResult {
+	status, previous := knownpeers.Check(name, fingerprint)
+	return PeerCheckResult{
+		Status:       string(status),
+		Code:         lanshare.VerifyCode(fingerprint),
+		PreviousCode: lanshare.VerifyCode(previous),
+	}
+}
+
+// PeerCheckResult is what the UI needs to decide whether to ask.
+type PeerCheckResult struct {
+	// Status is new | same | changed | unknown.
+	Status string `json:"status"`
+	// Code is the 6-digit verify code for what the device is presenting NOW,
+	// which is what the user compares against the device's own screen.
+	Code string `json:"code"`
+	// PreviousCode is what it presented last time, set only when Status is
+	// "changed" — showing both is what makes the change legible.
+	PreviousCode string `json:"previousCode"`
+}
+
+// PeerRemember records that the user accepted this device presenting this
+// certificate. It grants no trust: ADR-034 keeps that server-signed and
+// MFA-gated, and this only decides whether to ask again.
+func (a *App) PeerRemember(name, fingerprint string) error {
+	return knownpeers.Remember(name, fingerprint)
+}
+
+// PeerForget drops a device, so the next send is treated as first sight. The
+// honest case behind a changed certificate is a reinstalled machine.
+func (a *App) PeerForget(name string) error { return knownpeers.Forget(name) }
 
 // LocalAddresses lists this machine's own IPv4 addresses, most LAN-reachable
 // first. The status strip shows one; this is for the case a machine has several
