@@ -23,6 +23,7 @@ import (
 	"github.com/gen2brain/beeep"
 	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/lanshare"
+	"github.com/share2us/gui/internal/alias"
 	"github.com/share2us/gui/internal/autostart"
 	"github.com/share2us/gui/internal/clip"
 	"github.com/share2us/gui/internal/core"
@@ -1481,3 +1482,15 @@ func windowTitle(addrs []string) string {
 	}
 	return "Share2Us — " + addrs[0]
 }
+
+// PeerAlias names a nearby device, in this copy of the app only.
+//
+// A device publishes a name it signed, so nobody can take it — but it is still
+// whatever its owner typed, and three laptops called "DESKTOP-4F2K9A" are not a
+// security problem and are still an unusable list. Passing an empty name clears
+// the alias and lets the device's own name show again.
+//
+// Keyed on the device's stable identity, so the name survives the things that
+// actually change: a new DHCP lease, a different subnet, a VPN, a randomised MAC,
+// or the peer simply restarting (which regenerates its session certificate).
+func (a *App) PeerAlias(identity, name string) error { return alias.Set(identity, name) }

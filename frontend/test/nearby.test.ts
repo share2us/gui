@@ -81,3 +81,120 @@ describe('the opening frame', () => {
     expect(m.$$('.sk')).toHaveLength(0);
   });
 });
+
+// A scan-discovered device used to be a bare address, because a TLS probe
+// carried no name and mDNS — the only source of one — is exactly what fails on a
+// Public firewall profile, across subnets, and for every tailnet peer. The name
+// now rides in the device's signed card.
+const carded = {
+  ...named,
+  name: 'kestrel',
+  address: '192.168.15.9',
+  identity: 'ID-KESTREL',
+  viaScan: true,
+};
+
+describe('a device that published a card', () => {
+  it('is shown by name even though it was found by probing', async () => {
+    const m = await mount({ LanBrowse: async () => [carded] });
+    expect(m.text()).toContain('kestrel');
+    expect(m.text()).not.toMatch(/name not announced/i);
+  });
+
+  it('still shows the address, so the machine in front of you is identifiable', async () => {
+    const m = await mount({ LanBrowse: async () => [carded] });
+    expect(m.text()).toContain('192.168.15.9:4300');
+  });
+
+  it('can be given a local name', async () => {
+    const m = await mount({ LanBrowse: async () => [carded], PeerAlias: async () => null });
+    await click(m, '.rename-peer');
+    const input = m.$('#rename-input') as HTMLInputElement;
+    input.value = 'Study laptop';
+    await click(m, '#rename-save');
+    expect(m.calls.PeerAlias?.[0]).toEqual(['ID-KESTREL', 'Study laptop']);
+  });
+
+  it('names the device by its identity, never by its address or session key', async () => {
+    // The address moves with DHCP and the certificate is regenerated every time
+    // the device restarts. An alias attached to either would follow the wrong
+    // machine, or be lost on a reboot.
+    const m = await mount({ LanBrowse: async () => [carded], PeerAlias: async () => null });
+    await click(m, '.rename-peer');
+    await click(m, '#rename-save');
+    const key = m.calls.PeerAlias?.[0]?.[0];
+    expect(key).toBe('ID-KESTREL');
+    expect(key).not.toBe('AA');
+    expect(key).not.toContain('192.168');
+  });
+
+  it('clears the local name when the field is emptied', async () => {
+    const m = await mount({
+      LanBrowse: async () => [{ ...carded, name: 'Study laptop', aliased: true }],
+      PeerAlias: async () => null,
+    });
+    await click(m, '.rename-peer');
+    (m.$('#rename-input') as HTMLInputElement).value = '   ';
+    await click(m, '#rename-save');
+    expect(m.calls.PeerAlias?.[0]).toEqual(['ID-KESTREL', '']);
+  });
+
+  it("says a name is yours rather than the device's own", async () => {
+    const m = await mount({ LanBrowse: async () => [{ ...carded, name: 'Study laptop', aliased: true }] });
+    expect(m.text()).toMatch(/the name you gave it/i);
+  });
+});
+
+describe('a device with no proven identity', () => {
+  it('cannot be named, and says why instead of silently doing nothing', async () => {
+    // There would be nothing stable to attach the name to: keyed on an address,
+    // it would move to whatever holds that address next.
+    const m = await mount({ LanBrowse: async () => [scanned] });
+    const btn = m.$('.rename-peer') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toMatch(/stable identity/i);
+  });
+
+  it('keeps the control present so the row does not reflow', async () => {
+    // Design rule: no layout shift. A button that disappears for some devices
+    // moves every row beside it between refreshes.
+    const m = await mount({ LanBrowse: async () => [scanned, carded] });
+    expect(m.$$('.rename-peer')).toHaveLength(2);
+  });
+});
+
+// The bug this fixes, and the reason the identity had to reach discovery at all.
+// PeerCheck was fed the per-session certificate, which is regenerated every time
+// a device restarts — so an honest reboot looked like "this is not the device you
+// sent to last time", firing the one prompt W-M4 built to be meaningful on the
+// one case it must never fire on. Enough of those and people click through it.
+describe('remembering a device', () => {
+  it('remembers it by its stable identity, not its session certificate', async () => {
+    const m = await mount({
+      LanBrowse: async () => [carded],
+      PickFiles: async () => ['/tmp/a.pdf'],
+      PeerCheck: async () => ({ status: 'same', code: '123 456', previousCode: '' }),
+      LanSend: async () => [{ path: '/tmp/a.pdf', ok: true, error: '' }],
+    });
+    await click(m, '.send-to');
+    await click(m, '#primary-btn');
+    await m.settle(20);
+    expect(m.calls.PeerCheck?.[0]).toEqual(['kestrel', 'ID-KESTREL']);
+    expect(m.calls.PeerCheck?.[0]?.[1]).not.toBe('AA'); // 'AA' is the session cert
+  });
+
+  it('falls back to the certificate for a device with no card', async () => {
+    // An older peer publishes no identity. It is still checked — just with the
+    // only value it offers, exactly as before.
+    const m = await mount({
+      LanBrowse: async () => [named],
+      PickFiles: async () => ['/tmp/a.pdf'],
+      PeerCheck: async () => ({ status: 'same', code: '123 456', previousCode: '' }),
+      LanSend: async () => [{ path: '/tmp/a.pdf', ok: true, error: '' }],
+    });
+    await click(m, '.send-to');
+    await click(m, '#primary-btn');
+    await m.settle(20);
+    expect(m.calls.PeerCheck?.[0]).toEqual(['kestrel', 'AA']);
+  });
+});

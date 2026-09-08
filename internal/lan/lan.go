@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/share2us/gui/internal/alias"
+
 	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/lanshare"
 	"github.com/share2us/gui/internal/core"
@@ -144,6 +146,18 @@ type Peer struct {
 	Code        string `json:"code"` // 6-digit verify code (compare to the device's own screen)
 	Mode        string `json:"mode"`
 	Fingerprint string `json:"fingerprint"` // cert fp (download pinning)
+	// Identity is the device's STABLE fingerprint, from its verified device card.
+	// Fingerprint above is the per-session certificate — it is what a download
+	// pins, but it changes whenever the peer restarts, so it is the wrong thing
+	// to remember a device by or to name one after. Empty for a peer that
+	// published no card.
+	Identity string `json:"identity"`
+	// Address is the host on its own, so the UI can show it alongside a name
+	// rather than instead of one.
+	Address string `json:"address"`
+	// Aliased marks a name the USER gave this device, not one the device gave
+	// itself — the UI says which, because they carry different weight.
+	Aliased     bool   `json:"aliased"`
 	IsBroadcast bool   `json:"isBroadcast"` // true = offering a file to download
 	FileName    string `json:"fileName"`
 	FileSize    int64  `json:"fileSize"`
@@ -237,7 +251,7 @@ func Browse(ctx context.Context, opts BrowseOptions) ([]Peer, error) {
 		return nil, mdnsErr
 	}
 
-	return mergePeers(found, scan.peers), nil
+	return mergePeers(found, scan.peers, alias.All()), nil
 }
 
 // mergePeers folds the two discovery methods into one list.
@@ -245,18 +259,38 @@ func Browse(ctx context.Context, opts BrowseOptions) ([]Peer, error) {
 // Separated from Browse so it can be tested without a network: the rules here —
 // which source wins, what is deduplicated, what a nameless peer is called — are
 // where the mistakes live, and none of them need a socket to be wrong.
-func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer) []Peer {
+//
+// aliases maps a device's stable identity fingerprint to the name THIS user gave
+// it, and beats anything the device says about itself.
+func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer, aliases map[string]string) []Peer {
 	out := make([]Peer, 0, len(found)+len(scanned))
+	// A card belongs to a DEVICE, not to a discovery method, but the mDNS entry
+	// is the one kept when both sources see a device — so without this, anything
+	// on the local segment (the common case) would be listed from the source that
+	// has no verified identity, and could be neither remembered nor named. Index
+	// the scan's verified cards by the certificate both sources report.
+	cards := make(map[string]lanshare.ScannedPeer, len(scanned))
+	for _, p := range scanned {
+		if p.Fingerprint != "" && p.IdentityFingerprint != "" {
+			cards[p.Fingerprint] = p
+		}
+	}
 	seen := make(map[string]bool, len(found))
 	for _, p := range found {
 		if p.Fingerprint != "" {
 			seen[p.Fingerprint] = true
 		}
+		// The mDNS name is whatever the TXT record claimed, and a TXT record is
+		// attacker-choosable. Where the same device also answered a probe with a
+		// signed card, that name is proven and this one is not, so the card wins.
+		card := cards[p.Fingerprint]
 		out = append(out, Peer{
-			Name:        p.Name,
+			Name:        firstNonEmpty(card.Name, p.Name),
+			Identity:    card.IdentityFingerprint,
 			Addr:        p.Addr(),
+			Address:     p.Host,
 			Dest:        lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
-			Code:        lanshare.VerifyCode(p.Fingerprint),
+			Code:        lanshare.VerifyCode(firstNonEmpty(card.IdentityFingerprint, p.Fingerprint)),
 			Mode:        p.Mode,
 			Fingerprint: p.Fingerprint,
 			IsBroadcast: p.IsBroadcast,
@@ -271,18 +305,29 @@ func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer) []Peer {
 		}
 		seen[p.Fingerprint] = true
 		out = append(out, Peer{
-			// No name is available over a TLS probe. The address is shown rather
-			// than an invented label, so the user is never told a device is
-			// something it might not be; the verify code still identifies it.
-			Name:         p.Host,
+			// The name comes from the peer's VERIFIED device card. Falling back to
+			// the address rather than inventing a label, exactly as before, when a
+			// peer publishes no card — an older build, or a receiver with no
+			// identity.
+			Name:         firstNonEmpty(p.Name, p.Host),
 			Addr:         p.Addr(),
 			Dest:         lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
-			Code:         lanshare.VerifyCode(p.Fingerprint),
+			Code:         lanshare.VerifyCode(firstNonEmpty(p.IdentityFingerprint, p.Fingerprint)),
 			Mode:         "",
 			Fingerprint:  p.Fingerprint,
+			Identity:     p.IdentityFingerprint,
+			Address:      p.Host,
 			ViaScan:      true,
 			ViaTailscale: p.ViaTailscale,
 		})
+	}
+	// The user's own name for a device wins over the one the device published.
+	// Applied last, in one place, so no discovery path can miss it.
+	for i := range out {
+		if a := aliases[out[i].Identity]; a != "" && out[i].Identity != "" {
+			out[i].Name = a
+			out[i].Aliased = true
+		}
 	}
 	return out
 }
@@ -316,8 +361,18 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 	ip := PrimaryIP()
 	go func() {
 		var adv io.Closer
+		// Publish this device's card: its persistent identity and its name, signed
+		// into the listener's certificate. Without it a peer scanning for us learns
+		// only a per-session certificate fingerprint — no name, and a different
+		// "device" every time we restart.
+		identity, iderr := lanid.Identity()
+		if iderr != nil {
+			identity = nil // no card; discovery degrades to an address, as before
+		}
 		_, err := lanshare.Receive(ctx, lanshare.ReceiveOptions{
-			DestDir: destDir,
+			DestDir:    destDir,
+			Identity:   identity,
+			DeviceName: name,
 			// Bind all interfaces. A single detected IP (via the 8.8.8.8 route
 			// trick) is wrong behind a VPN/virtual default route, leaving the LAN
 			// unreachable. mDNS publishes every interface address, so binding all
@@ -335,7 +390,11 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 						Address: net.JoinHostPort(ip, strconv.Itoa(info.Port)),
 						Port:    info.Port,
 						Pairing: lanshare.BuildPairingString(ip, info),
-						Code:    lanshare.VerifyCode(info.Fingerprint),
+						// The STABLE code, not the per-session certificate's. This is
+						// what a peer now reads off our card and what the transfer
+						// prompt already showed, so the number on this screen finally
+						// matches the number on theirs in both places.
+						Code:    lanshare.VerifyCode(firstNonEmpty(info.IdentityFingerprint, info.Fingerprint)),
 						DestDir: destDir,
 					})
 				}
