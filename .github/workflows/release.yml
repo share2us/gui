@@ -323,10 +323,25 @@ jobs:
           # for Microsoft Store submission (the Store re-signs it).
           path: installer/windows/Output/*
 
-  # Publish whatever built (tolerant of a failed matrix leg).
+  # Publish only what fully built.
+  #
+  # This used to read `always() && needs.version.result == 'success'`, described
+  # as "tolerant of a failed matrix leg". The tolerance was the problem: on
+  # 2026-09-08 the installer job failed partway, and publish ran anyway and
+  # created a release carrying the portable zips but NO Share2Us-Setup.exe and no
+  # MSIX — then marked it Latest, which is precisely where the download page and
+  # the in-app updater look for the installer. A broken build became the release
+  # every Windows user resolves to.
+  #
+  # A partial release is worse than no release: no release is visible and gets
+  # fixed, while a partial one looks finished and quietly breaks installs. If a
+  # leg fails, fix it and re-run; nothing ships in the meantime.
   publish:
     needs: [version, build, installer]
-    if: ${{ always() && needs.version.result == 'success' }}
+    if: >-
+      ${{ needs.version.result == 'success'
+          && needs.build.result == 'success'
+          && needs.installer.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       # The release notes come from CHANGELOG.md, so this job needs the repo, not
