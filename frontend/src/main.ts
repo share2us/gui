@@ -158,7 +158,7 @@ const state = {
   loginInfo: null as LoginInfo | null,
   loginError: '' as string,
   // download confirm overlay
-  dl: null as (LanPeer & { trust?: boolean }) | null,
+  dl: null as (LanPeer & { trust?: boolean; check?: PeerCheck }) | null,
   // cloud share result (persistent copyable link)
   shareResult: null as { name: string; link: string; kind: string } | null,
 };
@@ -647,13 +647,28 @@ function requestOverlay(r: LanRequest): string {
   </div></div>`;
 }
 
-function downloadOverlay(p: LanPeer & { trust?: boolean }): string {
+function downloadOverlay(p: LanPeer & { trust?: boolean; check?: PeerCheck }): string {
+  // The name on a broadcast is claimable by anything on the network, and the
+  // fingerprint it advertises is what gets pinned — so this prompt used to ask
+  // "download from kestrel?" without any way to know it WAS kestrel. An impostor
+  // here feeds you its file and learns you are listening (todo §W, pull half).
+  const identity = !p.check || p.check.status === 'unknown' ? ''
+    : p.check.status === 'changed'
+      ? `<div class="warn-line"><b>This is not the ${escapeHtml(p.name)} you downloaded from before.</b>
+           It now shows <b>${escapeHtml(p.check.code)}</b>, previously <b>${escapeHtml(p.check.previousCode)}</b>.
+           That happens when a device is reinstalled, and when someone else is pretending to be it.</div>`
+      : p.check.status === 'new'
+        ? `<div class="hint">First time downloading from this device. Its code is <b>${escapeHtml(p.check.code)}</b> —
+             check ${escapeHtml(p.name)} is showing the same one.</div>`
+        : `<div class="hint">Same device you downloaded from before (code ${escapeHtml(p.check.code)}).</div>`;
+  const risky = p.check?.status === 'changed';
   return `<div class="overlay"><div class="overlay-card">
     <div class="overlay-title">Download from ${escapeHtml(p.name)}?</div>
     <div class="overlay-body"><b>${escapeHtml(p.fileName)}</b> <span class="hint">(${fmtBytes(p.fileSize)})</span></div>
+    ${identity}
     <div class="warn-line">⚠ You haven't trusted this device. Only download files from people you know — a downloaded file could be harmful.</div>
     <label class="chk-trust"><input type="checkbox" id="dl-trust"> Trust this device — auto-accept its files from now on</label>
-    <div class="overlay-actions"><button class="btn-hdr" id="dl-cancel">Cancel</button><button class="btn-accept" id="dl-go">Download</button></div>
+    <div class="overlay-actions"><button class="${risky ? 'btn-accept' : 'btn-hdr'}" id="dl-cancel">Cancel</button><button class="${risky ? 'btn-hdr' : 'btn-accept'}" id="dl-go">${risky ? 'Download anyway' : 'Download'}</button></div>
   </div></div>`;
 }
 
@@ -977,6 +992,8 @@ async function doDownload() {
   if (!p) return;
   const wantTrust = !!root.querySelector<HTMLInputElement>('#dl-trust')?.checked;
   state.dl = null; render();
+  // Recorded only now, after the person went ahead knowing what they were told.
+  try { await backend().PeerRemember(p.name, p.fingerprint); } catch { /* not worth failing a download over */ }
   toast('Downloading ' + p.fileName + '…');
   try {
     const res = await backend().LanDownload(p.addr, p.fingerprint, p.fileName, p.fileSize);
@@ -1110,7 +1127,18 @@ function wire() {
     state.view = 'share';
     render();
   });
-  on('.dl-btn', 'click', (e) => { const fp = (e.currentTarget as HTMLElement).dataset.fp; const p = state.peers.find((x) => x.isBroadcast && x.fingerprint === fp); if (p) { state.dl = p; render(); } });
+  on('.dl-btn', 'click', async (e) => {
+    const fp = (e.currentTarget as HTMLElement).dataset.fp;
+    const p = state.peers.find((x) => x.isBroadcast && x.fingerprint === fp);
+    if (!p) return;
+    state.dl = p;
+    render();
+    // Asked after the prompt is up, so a slow lookup never delays it opening.
+    try {
+      const check = await backend().PeerCheck(p.name, p.fingerprint);
+      if (state.dl && state.dl.fingerprint === p.fingerprint) { state.dl = { ...state.dl, check }; render(); }
+    } catch { /* the prompt is still worth showing without a verdict */ }
+  });
   on('.dest-opt', 'click', (e) => { state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest; render(); });
   // A div with a click handler is invisible to the keyboard. These are radios in
   // everything but markup, so they answer to Enter and Space like one.

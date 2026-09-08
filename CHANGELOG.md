@@ -16,6 +16,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+### Changed
+- **The download prompt now says whether the device is who it claims.** A name on
+  the network can be claimed by anything, so before downloading you see the code
+  to check against that device's screen. If a device you have downloaded from
+  before turns up with a different identity, the prompt says so, shows both codes,
+  and stops making Download the inviting button.
+
 ## [20260908103919] - 2026-09-08
 
 ### Added

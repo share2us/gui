@@ -77,3 +77,58 @@ describe('sending to a nearby device', () => {
     expect(m.calls.LanSend?.length).toBe(1);
   });
 });
+
+// The pull direction. A broadcast name is claimable by anything on the network,
+// and its advertised fingerprint is what gets pinned — so this prompt used to ask
+// "download from kestrel?" with no way to know it was kestrel.
+describe('downloading from a nearby device', () => {
+  const bc = {
+    name: 'kestrel', addr: '192.168.15.9:4300', dest: '', code: '123 456', mode: 'open',
+    fingerprint: 'BB', isBroadcast: true, fileName: 'holiday.zip', fileSize: 4096,
+  };
+  const withBroadcast = (check: unknown) => ({
+    LanBrowse: async () => [bc],
+    PeerCheck: async () => check,
+    LanDownload: async () => ({ name: 'holiday.zip', from: 'kestrel', fingerprint: 'BB', trusted: false }),
+  });
+
+  it('shows the code to compare on a first download', async () => {
+    const m = await mount(withBroadcast({ status: 'new', code: '123 456', previousCode: '' }));
+    await click(m, '.dl-btn');
+    await m.settle(20);
+    expect(m.text()).toContain('First time downloading from this device');
+    expect(m.text()).toContain('123 456');
+  });
+
+  it('says so, and stops inviting the click, when the identity changed', async () => {
+    const m = await mount(withBroadcast({ status: 'changed', code: '999 888', previousCode: '123 456' }));
+    await click(m, '.dl-btn');
+    await m.settle(20);
+    expect(m.text()).toContain('is not the kestrel you downloaded from before');
+    expect(m.text()).toContain('999 888');
+    expect(m.text()).toContain('123 456');
+    // Cancel becomes the emphasised action; Download says "anyway".
+    expect(m.$('#dl-cancel')?.className).toContain('btn-accept');
+    expect(m.$('#dl-go')?.textContent).toMatch(/anyway/i);
+  });
+
+  it('records the device only once the person downloads', async () => {
+    const m = await mount(withBroadcast({ status: 'new', code: '123 456', previousCode: '' }));
+    await click(m, '.dl-btn');
+    await m.settle(20);
+    expect(m.calls.PeerRemember).toBeUndefined();
+    await click(m, '#dl-go');
+    await m.settle(20);
+    expect(m.calls.PeerRemember?.[0]).toEqual(['kestrel', 'BB']);
+  });
+
+  it('still opens the prompt if the identity lookup fails', async () => {
+    const m = await mount({
+      LanBrowse: async () => [bc],
+      PeerCheck: async () => { throw new Error('nope'); },
+    });
+    await click(m, '.dl-btn');
+    await m.settle(20);
+    expect(m.text()).toContain('Download from kestrel');
+  });
+});
