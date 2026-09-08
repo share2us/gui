@@ -29,6 +29,16 @@ type Incoming = { id: string; name: string; size: number; from: string; at: stri
 
 type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string; channel: string; prerelease: boolean };
 type PeerCheck = { status: 'new' | 'same' | 'changed' | 'unknown'; code: string; previousCode: string };
+
+// What a device is REMEMBERED by. The per-session certificate is regenerated
+// every time a device restarts, so remembering that value made an honest reboot
+// look like an impostor — the exact prompt W-M4 exists to keep meaningful,
+// firing on the one case it should never fire on. The identity from a verified
+// device card is stable and cannot be worn by anyone else, so it is the key;
+// the certificate remains the fallback for a peer that publishes no card.
+function peerKey(p: { identity?: string; fingerprint: string }): string {
+  return p.identity || p.fingerprint;
+}
 // What the send is waiting on while the user answers.
 type PeerPrompt = { name: string; fingerprint: string; dest: string; check: PeerCheck };
 
@@ -40,8 +50,12 @@ const NET_PUBLIC = 1;
 type LanPeer = {
   name: string; addr: string; dest: string; code: string; mode: string;
   fingerprint: string; isBroadcast: boolean; fileName: string; fileSize: number;
-  // Found by probing the subnet rather than by mDNS, so there is no name to show
-  // and "nearby" may mean "over the tailnet".
+  // identity is the device's stable fingerprint from its verified device card;
+  // address is the bare host, so a named device can show both. aliased marks a
+  // name THIS user gave the device rather than one the device gave itself.
+  identity?: string; address?: string; aliased?: boolean;
+  // Found by probing the subnet rather than by mDNS, so "nearby" may mean "over
+  // the tailnet".
   viaScan?: boolean; viaTailscale?: boolean;
 };
 type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string; trusted?: boolean };
@@ -84,6 +98,7 @@ interface AppBackend {
   LocalAddresses(): Promise<string[]>;
   PeerCheck(name: string, fingerprint: string): Promise<PeerCheck>;
   PeerRemember(name: string, fingerprint: string): Promise<void>;
+  PeerAlias(identity: string, name: string): Promise<void>;
   PeerForget(name: string): Promise<void>;
   NetworkProfile(): Promise<NetProfile>;
   OpenNetworkSettings(): Promise<void>;
@@ -123,6 +138,7 @@ const state = {
   discAddr: '' as string, // this device's own ip:port, so the user can match it against a device list without hunting for it
   localAddrs: [] as string[],
   confirmDrop: null as { id: string; name: string } | null, // deleting an unsaved arrival is not undoable, so it is confirmed
+  renamePeer: null as { identity: string; name: string; addr: string } | null,
   netProfile: null as NetProfile | null, // every IPv4 this machine has, for the strip's tooltip
   discSafety: '' as string, // this device's safety number (compare before trusting it from elsewhere)
   clip: null as ClipSuggestion | null,
@@ -329,6 +345,7 @@ function renderHome(): void {
     ${state.peerPrompt ? peerConfirmOverlay(state.peerPrompt) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
     ${state.confirmDrop ? dropConfirmOverlay(state.confirmDrop) : ''}
+    ${state.renamePeer ? renamePeerOverlay(state.renamePeer) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
     ${shaiPanel()}
     ${statusStrip()}
@@ -430,16 +447,43 @@ function bcastRow(p: LanPeer): string {
   </div>`;
 }
 
+// A device is named when it told us its name (a verified card, or mDNS) or when
+// this user named it. Otherwise the fallback IS the address, and repeating it as
+// both name and detail would just look broken.
+function peerNamed(p: LanPeer): boolean {
+  if (!p.name) return false;
+  // Derive the host from addr when the backend did not send one separately, so a
+  // name that is really just the address is still recognised as no name.
+  const host = p.address || p.addr.replace(/:\d+$/, '');
+  return p.name !== host && p.name !== p.addr;
+}
+
 function nearbyRow(p: LanPeer): string {
-  const label = p.viaScan
-    ? `<b>${escapeHtml(p.addr)}</b> <span class="meta">${p.viaTailscale ? 'over Tailscale' : 'name not announced'}</span>`
-    : `<b>${escapeHtml(p.name)}</b> <span class="meta">${escapeHtml(p.addr)}</span>`;
+  const named = peerNamed(p);
+  const why = p.aliased
+    ? 'the name you gave it'
+    : p.viaTailscale
+    ? 'over Tailscale'
+    : p.viaScan
+    ? 'name not announced'
+    : '';
+  const label = named
+    ? `<b>${escapeHtml(p.name)}</b> <span class="meta">${escapeHtml(p.addr)}${why && p.aliased ? ` · ${why}` : ''}</span>`
+    : `<b>${escapeHtml(p.addr)}</b> <span class="meta">${escapeHtml(why || 'name not announced')}</span>`;
+  // A device with no verified identity has nothing stable to hang a name on: an
+  // alias keyed to its address would move to whatever holds that address next.
+  // The button stays present and disabled rather than vanishing, so the row does
+  // not reflow between refreshes (design rule: no layout shift).
+  const canName = !!p.identity;
+  const nameTitle = canName
+    ? (p.aliased ? 'Change the name you gave this device' : 'Give this device a name of your own')
+    : 'This device has not proved a stable identity, so a name could not stay attached to it';
   return `<div class="item">
     <div class="ico rx">📡</div>
-    <div class="line" ${p.viaScan ? 'title="Found by probing the network directly. This device is reachable, but its name did not arrive, which usually means multicast (mDNS) is blocked between you."' : ''}>${label}${
+    <div class="line" ${!named && p.viaScan ? 'title="Found by probing the network directly. This device is reachable, but its name did not arrive, which usually means multicast (mDNS) is blocked between you."' : ''}>${label}${
       p.code ? ` <span class="tag code">${escapeHtml(p.code)}</span>` : ''
     }</div>
-    <div class="acts"><button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(p.viaScan ? p.addr : p.name)}" title="Choose files to send to this device">→</button></div>
+    <div class="acts"><button class="ib rename-peer" ${canName ? '' : 'disabled'} data-identity="${escapeHtml(p.identity || '')}" data-name="${escapeHtml(named ? p.name : '')}" data-addr="${escapeHtml(p.addr)}" title="${nameTitle}" aria-label="${nameTitle}">✎</button><button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(named ? p.name : p.addr)}" title="Choose files to send to this device">→</button></div>
   </div>`;
 }
 
@@ -650,6 +694,27 @@ function requestOverlay(r: LanRequest): string {
     <div class="overlay-body"><b>${escapeHtml(r.name)}</b> <span class="hint">(${fmtBytes(r.size)})</span><div class="hint">${who} ${verb}</div></div>
     ${trustBox}
     <div class="overlay-actions"><button class="btn-hdr" id="req-reject">Decline</button><button class="btn-accept" id="req-accept">Accept</button></div>
+  </div></div>`;
+}
+
+// Name a device, for this copy of the app only.
+//
+// The name is said plainly to be local, because the obvious wrong guess is that
+// it renames the other machine — and the second wrong guess, worse, is that it
+// makes the device trusted. It does neither: the verify code is still what
+// decides whether this is the device you think it is.
+function renamePeerOverlay(p: { identity: string; name: string; addr: string }): string {
+  return `<div class="overlay"><div class="overlay-card">
+    <div class="overlay-title">Name this device</div>
+    <div class="overlay-body">
+      <label class="fld">Name
+        <input id="rename-input" type="text" maxlength="64" value="${escapeHtml(p.name)}" placeholder="${escapeHtml(p.addr)}" autocomplete="off" spellcheck="false"></label>
+      <div class="hint">Only you see this. It does not rename the other device, and it does not trust it — the verify code still decides that. Leave it empty to go back to the name the device gives itself.</div>
+    </div>
+    <div class="overlay-actions">
+      <button class="btn-hdr" id="rename-cancel">Cancel</button>
+      <button class="btn-accept" id="rename-save">Save</button>
+    </div>
   </div></div>`;
 }
 
@@ -934,7 +999,7 @@ async function onPrimary() {
     // else could claim, so there is no name to compare and nothing to check.
     const peer = state.peers.find((p) => p.dest === dest);
     if (typed || !peer) return sendTo(dest);
-    return sendToChecked(dest, peer.name, peer.fingerprint);
+    return sendToChecked(dest, peer.name, peerKey(peer));
   }
   return doShare();
 }
@@ -1017,7 +1082,7 @@ async function doDownload() {
   const wantTrust = !!root.querySelector<HTMLInputElement>('#dl-trust')?.checked;
   state.dl = null; render();
   // Recorded only now, after the person went ahead knowing what they were told.
-  try { await backend().PeerRemember(p.name, p.fingerprint); } catch { /* not worth failing a download over */ }
+  try { await backend().PeerRemember(p.name, peerKey(p)); } catch { /* not worth failing a download over */ }
   toast('Downloading ' + p.fileName + '…');
   try {
     const res = await backend().LanDownload(p.addr, p.fingerprint, p.fileName, p.fileSize);
@@ -1078,6 +1143,20 @@ async function saveIncoming(id: string) {
       toast('Saved');
     }
     render();
+  } catch (e) { toast(String(e)); }
+}
+
+// Save (or clear) the local name for a device, then re-scan so the list redraws
+// with it. Quiet and shallow: the name changed, not the network.
+async function savePeerName() {
+  const p = state.renamePeer;
+  if (!p) return;
+  const name = (root.querySelector<HTMLInputElement>('#rename-input')?.value || '').trim();
+  state.renamePeer = null;
+  render();
+  try {
+    await backend().PeerAlias(p.identity, name);
+    await findNearby(true, false);
   } catch (e) { toast(String(e)); }
 }
 
@@ -1209,7 +1288,7 @@ function wire() {
     render();
     // Asked after the prompt is up, so a slow lookup never delays it opening.
     try {
-      const check = await backend().PeerCheck(p.name, p.fingerprint);
+      const check = await backend().PeerCheck(p.name, peerKey(p));
       if (state.dl && state.dl.fingerprint === p.fingerprint) { state.dl = { ...state.dl, check }; render(); }
     } catch { /* the prompt is still worth showing without a verdict */ }
   });
@@ -1310,6 +1389,20 @@ function wire() {
       saveIncoming(el.dataset.id || '');
     }),
   );
+  root.querySelectorAll<HTMLElement>('.rename-peer').forEach((el) =>
+    el.addEventListener('click', () => {
+      const identity = el.dataset.identity || '';
+      if (!identity) return; // disabled anyway; belt and braces
+      state.renamePeer = { identity, name: el.dataset.name || '', addr: el.dataset.addr || '' };
+      render();
+      root.querySelector<HTMLInputElement>('#rename-input')?.focus();
+    }),
+  );
+  on('#rename-cancel', 'click', () => { state.renamePeer = null; render(); });
+  on('#rename-save', 'click', savePeerName);
+  root.querySelector('#rename-input')?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') savePeerName();
+  });
   on('#drop-cancel', 'click', () => { state.confirmDrop = null; render(); });
   on('#drop-confirm', 'click', () => { if (state.confirmDrop) discardIncoming(state.confirmDrop.id); });
   root.querySelectorAll<HTMLElement>('.drop-incoming').forEach((el) =>
@@ -1459,6 +1552,7 @@ function setupListeners() {
   // Escape closes an open overlay, or backs a modal out to Home.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (state.renamePeer) { state.renamePeer = null; render(); return; }
     if (state.confirmDrop) { state.confirmDrop = null; render(); return; }
     if (state.shareResult) { state.shareResult = null; render(); return; }
     if (state.dl) { state.dl = null; render(); return; }
