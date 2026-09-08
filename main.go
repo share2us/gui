@@ -286,6 +286,11 @@ func runWindow(app *App) {
 		},
 		BackgroundColour: &options.RGBA{R: 15, G: 17, B: 21, A: 1},
 		OnStartup:        app.startup,
+		// The title is set again once the frontend is up. OnStartup runs before
+		// the window has finished being created on Windows, where the title from
+		// the options above can land last and overwrite it — and the address in
+		// the title is only useful if it is actually there.
+		OnDomReady: func(context.Context) { app.refreshWindowTitle() },
 		// Native file drop: dropped file paths are forwarded to the modal.
 		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},
 		Windows: &windows.Options{

@@ -36,15 +36,36 @@ describe('a nearby device', () => {
 });
 
 describe('this device', () => {
-  it('shows its own address beside its verify code', async () => {
+  it('shows its own address and its verify code', async () => {
     // So the person reading someone else's device list can tell which entry is
     // theirs, without going to look it up in the operating system.
     const m = await mount();
     m.emit('lan-discoverable', { address: '192.168.15.114:4300', code: '123 456', safety: '1111 2222' });
     await m.settle(5);
-    const strip = m.$('.strip-txt')?.textContent ?? '';
-    expect(strip).toContain('192.168.15.114:4300');
-    expect(strip).toContain('123 456');
+    expect(m.$('.strip-self')?.textContent ?? '').toContain('192.168.15.114:4300');
+    expect(m.$('.strip-txt')?.textContent ?? '').toContain('123 456');
+  });
+
+  it('shows its address even when it is not discoverable', async () => {
+    // The moment you are most likely to be reading this is while working out why
+    // the other laptop cannot see you — which is exactly when discoverable is
+    // off. Keeping the address inside the "Discoverable" sentence took it away
+    // at that moment.
+    const m = await mount({
+      Status: async () => ({
+        loggedIn: true, email: 'someone@example.com', isApiToken: false, canReceive: true,
+        shellInstalled: false, autostartEnabled: false, discoverable: false,
+      }),
+    });
+    await m.settle(5);
+    expect(m.$('.strip-txt')?.textContent ?? '').toMatch(/not discoverable/i);
+    expect(m.$('.strip-self')?.textContent ?? '').toContain('192.168.15.114');
+  });
+
+  it('keeps the address slot present when there is no address, so the strip does not reflow', async () => {
+    const m = await mount({ LocalAddresses: async () => [] });
+    await m.settle(5);
+    expect(m.$('.strip-self')).not.toBeNull();
   });
 
   it('says nothing about the network profile unless Windows actually reported one', async () => {
