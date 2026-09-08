@@ -16,6 +16,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+### Fixed
+- Re-issues the previous release, which was published without the Windows
+  installer because the build stopped partway. Nothing was wrong with the app
+  itself; the release was simply incomplete. If you installed from it, this one
+  is complete.
+
 ## [20260908063848] - 2026-09-08
 
 ### Fixed
