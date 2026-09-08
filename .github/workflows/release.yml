@@ -223,9 +223,29 @@ jobs:
           "SIGNTOOL=$signtool" | Out-File -Append -Encoding ascii $env:GITHUB_ENV
 
           # 1) Sign the app + CLI binaries in dist\.
+          #
+          # $env:SIGN_THUMB, not $cert.Thumbprint. $cert is created in the
+          # "Prepare signing certificate" step, and PowerShell variables do NOT
+          # survive across GitHub Actions steps — each run: block is a fresh
+          # shell. So $cert was empty here, /sha1 swallowed the next argument,
+          # and every release since the first logged:
+          #
+          #   SignTool Error: Invalid SHA1 hash format: /fd
+          #
+          # once per binary, while the step stayed green because a mid-script
+          # native failure does not fail a pwsh step. share2us-gui.exe and
+          # s2u.exe have therefore NEVER been signed; only Setup.exe was, because
+          # that step already reads $env:SIGN_THUMB. Fixed 2026-09-08.
+          if (-not $env:SIGN_THUMB) {
+            throw "SIGN_THUMB is not set - the signing step ran before the certificate step, or that step failed."
+          }
           foreach ($f in @('dist\share2us-gui.exe','dist\s2u.exe')) {
             if (Test-Path $f) {
-              & $signtool sign /sha1 $cert.Thumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $f
+              & $signtool sign /sha1 $env:SIGN_THUMB /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $f
+              # Fail loudly. Silence is what let this run broken for months.
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed for $f (exit $LASTEXITCODE)" }
+              & $signtool verify /pa $f
+              if ($LASTEXITCODE -ne 0) { throw "signature did not verify for $f" }
             }
           }
 
