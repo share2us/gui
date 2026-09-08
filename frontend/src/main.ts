@@ -28,6 +28,10 @@ type LoginInfo = { userCode: string; verificationUrl: string; verificationUri: s
 type Incoming = { id: string; name: string; size: number; from: string; at: string; file: string; filed?: boolean; savedTo?: string };
 
 type UpdateInfo = { available: boolean; current: string; latest: string; assetUrl: string; assetName: string; page: string; channel: string; prerelease: boolean };
+type PeerCheck = { status: 'new' | 'same' | 'changed' | 'unknown'; code: string; previousCode: string };
+// What the send is waiting on while the user answers.
+type PeerPrompt = { name: string; fingerprint: string; dest: string; check: PeerCheck };
+
 type NetProfile = { category: number; name: string; supported: boolean };
 // Mirrors internal/netprofile.Category. 0 is "could not tell": the UI stays
 // silent on it rather than guessing at the user's network.
@@ -78,6 +82,9 @@ interface AppBackend {
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
   LanBrowse(deep: boolean): Promise<LanPeer[]>;
   LocalAddresses(): Promise<string[]>;
+  PeerCheck(name: string, fingerprint: string): Promise<PeerCheck>;
+  PeerRemember(name: string, fingerprint: string): Promise<void>;
+  PeerForget(name: string): Promise<void>;
   NetworkProfile(): Promise<NetProfile>;
   OpenNetworkSettings(): Promise<void>;
   SetDiscoverable(on: boolean): Promise<void>;
@@ -126,6 +133,7 @@ const state = {
   incoming: [] as Incoming[], // staged arrivals awaiting a save location
   incomingFolder: '' as string, // remembered destination; '' means ask each time
   pendingRemember: '' as string, // folder just used, offered as the default once
+  peerPrompt: null as PeerPrompt | null, // W-M4: asked on first sight, and when a known device changes identity
   shaiOpen: false as boolean,
   updateOpen: false as boolean,
   updateChecking: false as boolean,
@@ -317,6 +325,7 @@ function renderHome(): void {
     </div>
     ${state.requests.length ? requestOverlay(state.requests[0]) : ''}
     ${state.trustPrompt && !state.requests.length ? trustCodeOverlay(state.trustPrompt) : ''}
+    ${state.peerPrompt ? peerConfirmOverlay(state.peerPrompt) : ''}
     ${state.dl ? downloadOverlay(state.dl) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
     ${shaiPanel()}
@@ -482,6 +491,7 @@ function renderShare(): void {
       <div class="foot-reason">${escapeHtml(footerReason())}</div>
       <button class="btn-primary" id="primary-btn" ${canPrimary() ? '' : 'disabled'}>${escapeHtml(primaryLabel())}</button>
     </footer>
+    ${state.peerPrompt ? peerConfirmOverlay(state.peerPrompt) : ''}
     ${shaiPanel()}
     ${statusStrip()}
     ${buildStrip()}
@@ -682,6 +692,33 @@ function updatePanel(): string {
 }
 // ADR-034: the second factor. The transfer has already been answered; this only
 // decides whether the device becomes trusted.
+// Asked once per device, then only when the certificate changes. The mDNS name
+// is attacker-choosable, so a familiar name presenting a new identity is exactly
+// the impersonation this exists to catch — and it is drawn differently from the
+// routine first-sight case, because the two mean very different things.
+function peerConfirmOverlay(p: PeerPrompt): string {
+  const changed = p.check.status === 'changed';
+  const title = changed
+    ? `${escapeHtml(p.name)} is not the device you sent to before`
+    : `First time sending to ${escapeHtml(p.name)}`;
+  const body = changed
+    ? `<div class="warn-line">This name now shows a different identity. That happens when a device is
+         reinstalled, and it also happens when someone else on this network is pretending to be it.</div>
+       <div class="hint">Now showing <b>${escapeHtml(p.check.code)}</b>, previously <b>${escapeHtml(p.check.previousCode)}</b>.
+         Check the code on ${escapeHtml(p.name)} itself. If it does not match, do not send.</div>`
+    : `<div class="hint">Its code is <b>${escapeHtml(p.check.code)}</b>. Check that ${escapeHtml(p.name)} is
+         showing the same one, so you know it is really that device and not something else answering to the name.</div>
+       <div class="hint">You will not be asked again unless its identity changes.</div>`;
+  return `<div class="overlay"><div class="overlay-card">
+    <div class="overlay-title">${title}</div>
+    <div class="overlay-body">${body}</div>
+    <div class="overlay-actions">
+      <button class="btn-hdr" id="peer-cancel">Don't send</button>
+      <button class="btn-accept" id="peer-confirm">${changed ? 'Codes match, send' : 'Send'}</button>
+    </div>
+  </div></div>`;
+}
+
 function trustCodeOverlay(p: TrustPrompt): string {
   const how = p.factor === 'totp'
     ? 'Enter the 6-digit code from your authenticator app.'
@@ -854,9 +891,29 @@ async function onPrimary() {
     const typed = (root.querySelector<HTMLInputElement>('#net-dest')?.value || '').trim();
     const dest = typed || state.picked?.dest || '';
     if (!dest) { root.querySelector<HTMLInputElement>('#net-dest')?.focus(); return; }
-    return sendTo(dest);
+    // A typed address was chosen by the person, not resolved from a name someone
+    // else could claim, so there is no name to compare and nothing to check.
+    const peer = state.peers.find((p) => p.dest === dest);
+    if (typed || !peer) return sendTo(dest);
+    return sendToChecked(dest, peer.name, peer.fingerprint);
   }
   return doShare();
+}
+
+// W-M4: check the device is the one we sent to last time before handing it a
+// file. Same identity -> straight through, which is the common case and must stay
+// one click. Otherwise ask, and only record the answer once the user has given it.
+async function sendToChecked(dest: string, name: string, fingerprint: string) {
+  if (!fingerprint || !name) return sendTo(dest); // nothing to compare
+  let check: PeerCheck;
+  try {
+    check = await backend().PeerCheck(name, fingerprint);
+  } catch {
+    return sendTo(dest); // never block a send on the memory failing
+  }
+  if (check.status === 'same' || check.status === 'unknown') return sendTo(dest);
+  state.peerPrompt = { name, fingerprint, dest, check };
+  render();
 }
 
 async function sendTo(dest: string) {
@@ -1089,6 +1146,16 @@ function wire() {
   nd?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') { e.preventDefault(); useTyped(); } });
   root.querySelector<HTMLDetailsElement>('.opt-card')?.addEventListener('toggle', (e) => (state.optionsOpen = (e.target as HTMLDetailsElement).open));
   // request approval overlay
+  on('#peer-cancel', 'click', () => { state.peerPrompt = null; render(); });
+  on('#peer-confirm', 'click', async () => {
+    const p = state.peerPrompt;
+    if (!p) return;
+    state.peerPrompt = null;
+    // Recorded only now, after the person said yes. Writing on sight would make
+    // an impostor seen once silently familiar the second time.
+    try { await backend().PeerRemember(p.name, p.fingerprint); } catch { /* not worth blocking the send */ }
+    await sendTo(p.dest);
+  });
   root.querySelector('#req-reject')?.addEventListener('click', () => respondRequest(false));
   root.querySelector('#req-accept')?.addEventListener('click', async () => {
     const r = state.requests[0];

@@ -16,6 +16,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+### Added
+- **The app now notices if a nearby device changes identity.** A device's name on
+  the network can be claimed by anything, so the app remembers which device
+  answered to a name last time. The first time you send somewhere it shows the
+  code once so you can check it matches that device's screen; after that it stays
+  quiet, and speaks up only if the name later shows a different identity, which is
+  what impersonation looks like.
+
 ### Fixed
 - Re-issues the previous release, which was published without the Windows
   installer because the build stopped partway. Nothing was wrong with the app
