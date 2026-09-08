@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+## [20260908103919] - 2026-09-08
+
 ### Added
 - **The app now notices if a nearby device changes identity.** A device's name on
   the network can be claimed by anything, so the app remembers which device
