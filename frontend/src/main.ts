@@ -1069,11 +1069,11 @@ async function doShare() {
   const kind = state.dest;
   const name = basename(state.paths[0] || '');
   const btn = root.querySelector<HTMLButtonElement>('#primary-btn')!;
-  btn.disabled = true; btn.textContent = 'Sharing…';
+  btn.disabled = true; // the working bar (busyClick) says it is going; the label must not change width
   try {
     const out = await backend().Share(req);
     const failed = out.find((o) => !o.ok);
-    if (failed) { btn.disabled = false; btn.textContent = primaryLabel(); toast(failed.error || 'Share failed'); return; }
+    if (failed) { btn.disabled = false; toast(failed.error || 'Share failed'); return; }
     const link = out.find((o) => o.ok && o.link)?.link;
     state.view = 'home'; state.paths = [];
     await refreshActivity();
@@ -1081,7 +1081,7 @@ async function doShare() {
     if (link) { copy(link); state.shareResult = { name, link, kind }; }
     else { toast('Shared'); }
     render();
-  } catch (e) { btn.disabled = false; btn.textContent = primaryLabel(); toast(String(e)); }
+  } catch (e) { btn.disabled = false; toast(String(e)); }
 }
 
 // ---- Downloads + broadcast lifecycle ---------------------------------------
@@ -1198,11 +1198,28 @@ let scanTimer = 0;
 // asks for the cheap pass, which re-probes only devices already seen. A desktop
 // app that connected to every address on the network once a minute would look
 // exactly like a port scanner to endpoint security, and would be one.
-async function findNearby(quiet = false, deep = true) {
-  if (state.browsing) return;
+let scanInflight: Promise<void> | null = null;
+async function findNearby(quiet = false, deep = true): Promise<void> {
+  // A scan is already running: JOIN it rather than returning immediately. The
+  // early return was invisible — press the rescan button while the automatic
+  // check happened to be running and absolutely nothing happened, which is the
+  // same thing a hung app does. Awaiting the one in flight means the button
+  // stays marked as working until there is actually a result.
+  if (state.browsing) {
+    if (scanInflight) await scanInflight;
+    return;
+  }
   state.browsing = true; if (!quiet) render();
-  try { state.peers = (await backend().LanBrowse(deep)) || []; } catch { /* keep last list */ }
-  state.browsing = false;
+  const work = (async () => {
+    try { state.peers = (await backend().LanBrowse(deep)) || []; } catch { /* keep last list */ }
+  })();
+  scanInflight = work;
+  try {
+    await work;
+  } finally {
+    scanInflight = null;
+    state.browsing = false;
+  }
   // Repaint where the result is actually on screen. Home always; the share modal
   // too when its device list is showing, because that list arrives AFTER the
   // modal does when the app is opened straight into Share from the file manager
@@ -1229,6 +1246,48 @@ async function checkClipboard() {
 }
 async function addClipboard() { const c = state.clip; if (!c) return; try { addPaths([await backend().AddClipboard(c.kind)]); state.view = 'share'; render(); } catch (e) { toast(String(e)); } }
 
+// busyWhile marks a control as working until its promise settles.
+//
+// The delay is the point. Showing it the instant a button is pressed means a
+// 20ms action flashes an indicator, which looks like a glitch rather than
+// progress; the CSS :active press already answers "did that register?". Only
+// work that outlives BUSY_DELAY says anything, and then it says it until it is
+// genuinely done.
+//
+// The class is removed in a finally, so a rejected promise cannot leave a
+// control stuck looking busy — and re-rendering mid-flight is harmless, because
+// removing a class from a node that has since been replaced does nothing.
+const BUSY_DELAY = 120;
+async function busyWhile<T>(el: Element | null, work: Promise<T>): Promise<T> {
+  if (!el) return work;
+  // Resolve the control again each time rather than holding the node. Several of
+  // these handlers re-render before their work finishes (a scan repaints the
+  // list as it starts), which replaces the button — so a class added to the
+  // captured node would be added to something no longer on screen, and the
+  // control the user is looking at would sit there saying nothing. Buttons
+  // without an id are the ones that do not survive a repaint anyway, so for
+  // those the original node is still the right answer.
+  const find = () => (el.id ? root.querySelector('#' + el.id) : el);
+  const timer = window.setTimeout(() => find()?.classList.add('is-busy'), BUSY_DELAY);
+  try {
+    return await work;
+  } finally {
+    clearTimeout(timer);
+    find()?.classList.remove('is-busy');
+  }
+}
+
+// busyClick wires a click handler and shows the button as working for as long as
+// the handler runs. Applied at the wiring layer rather than inside each action so
+// a new button cannot quietly be added without it.
+function busyClick(sel: string, fn: (e: Event) => unknown) {
+  root.querySelectorAll<HTMLElement>(sel).forEach((el) =>
+    el.addEventListener('click', (e) => {
+      void busyWhile(el, Promise.resolve(fn(e)).catch(() => undefined));
+    }),
+  );
+}
+
 // ---- Wiring ----------------------------------------------------------------
 
 function wire() {
@@ -1240,7 +1299,7 @@ function wire() {
     if (state.updateOpen && !state.update?.available) manualUpdateCheck();
   });
   on('#upd-close, #upd-later', 'click', () => { state.updateOpen = false; render(); });
-  root.querySelector('#login-btn')?.addEventListener('click', signIn);
+  busyClick('#login-btn', signIn); // opens a browser and waits on the round trip
   root.querySelector('#reopen-login')?.addEventListener('click', () => backend().BeginLogin());
   root.querySelector('#logout-btn')?.addEventListener('click', logout);
   root.querySelector('#apply-update')?.addEventListener('click', applyUpdate);
@@ -1248,12 +1307,12 @@ function wire() {
   root.querySelector('#pick-files')?.addEventListener('click', (e) => { e.stopPropagation(); pickFiles(); });
   root.querySelector('#canvas')?.addEventListener('click', pickFiles);
   root.querySelector('#share-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
-  root.querySelector('#nearby-find')?.addEventListener('click', () => findNearby());
+  busyClick('#nearby-find', () => findNearby()); // a deep pass probes the whole subnet
   root.querySelector('#open-net-settings')?.addEventListener('click', async () => {
     try { await backend().OpenNetworkSettings(); } catch (e) { toast(String(e)); }
   });
   root.querySelector('#clip-add')?.addEventListener('click', addClipboard);
-  root.querySelector('#primary-btn')?.addEventListener('click', onPrimary);
+  busyClick('#primary-btn', onPrimary); // sends, or uploads a share
   root.querySelector('#bc-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
   root.querySelectorAll('#bc-stop').forEach((b) => b.addEventListener('click', stopBroadcast));
   root.querySelector('#live-row')?.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest('#bc-stop')) { state.view = 'broadcast'; render(); } });
@@ -1273,7 +1332,7 @@ function wire() {
   // empty list: nothing was sent, and an empty result counts as "every transfer
   // succeeded", so it reported nothing either. Ask for the files first, then hand
   // the user the send flow with this device already chosen.
-  on('.send-to', 'click', async (e) => {
+  busyClick('.send-to', async (e) => {
     const el = e.currentTarget as HTMLElement;
     const dest = el.dataset.dest || '';
     const name = el.dataset.name || dest;
@@ -1358,7 +1417,7 @@ function wire() {
   });
   // download confirm overlay
   root.querySelector('#dl-cancel')?.addEventListener('click', () => { state.dl = null; render(); });
-  root.querySelector('#dl-go')?.addEventListener('click', doDownload);
+  busyClick('#dl-go', doDownload);
   // share-result overlay (persistent copyable link)
   root.querySelector('#share-done')?.addEventListener('click', () => { state.shareResult = null; render(); });
   root.querySelector('#share-copy')?.addEventListener('click', () => {
@@ -1396,7 +1455,7 @@ function wire() {
   root.querySelectorAll<HTMLElement>('.save-incoming').forEach((el) =>
     el.addEventListener('click', (e) => {
       e.stopPropagation(); // the row handles clicks too; don't run this twice
-      saveIncoming(el.dataset.id || '');
+      void busyWhile(el, saveIncoming(el.dataset.id || ''));
     }),
   );
   root.querySelectorAll<HTMLElement>('.rename-peer').forEach((el) =>
@@ -1409,12 +1468,12 @@ function wire() {
     }),
   );
   on('#rename-cancel', 'click', () => { state.renamePeer = null; render(); });
-  on('#rename-save', 'click', savePeerName);
+  busyClick('#rename-save', savePeerName);
   root.querySelector('#rename-input')?.addEventListener('keydown', (e) => {
     if ((e as KeyboardEvent).key === 'Enter') savePeerName();
   });
   on('#drop-cancel', 'click', () => { state.confirmDrop = null; render(); });
-  on('#drop-confirm', 'click', () => { if (state.confirmDrop) discardIncoming(state.confirmDrop.id); });
+  busyClick('#drop-confirm', () => (state.confirmDrop ? discardIncoming(state.confirmDrop.id) : undefined));
   root.querySelectorAll<HTMLElement>('.drop-incoming').forEach((el) =>
     el.addEventListener('click', (e) => {
       e.stopPropagation(); // the row saves on click; ✕ must not also save

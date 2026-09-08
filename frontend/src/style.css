@@ -152,6 +152,62 @@
   box-sizing: border-box;
 }
 
+/* ── Press + working feedback ──────────────────────────────────────────────
+   Every button gave the same feedback on click: none. A control that starts a
+   native file dialog, a subnet scan or a transfer just sat there looking
+   identical to one that had not registered the click at all, which reads as the
+   app having hung.
+
+   Two layers, because they answer different questions. The press answers "did
+   that register?" and has to be instant, so it is pure CSS with no JavaScript in
+   the path. The working state answers "is it still going?" and deliberately
+   waits ~120ms before appearing (see busyWhile), so a fast action does not
+   flash a spinner at somebody. */
+button:not(:disabled) {
+  transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+button:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+/* Working. The label STAYS readable and the box keeps its exact size: swapping
+   the text for "Sharing…" (which is what the share button used to do) resizes
+   the button and shoves everything beside it (design rule: no layout shift).
+   The indicator is a bar travelling along the bottom edge, drawn in currentColor
+   at low alpha so it works on the accent, on the danger red and on a plain
+   header button without knowing which it is on. */
+.is-busy {
+  position: relative;
+  overflow: hidden;
+  opacity: 0.75;
+  cursor: progress;
+  pointer-events: none;
+}
+.is-busy::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 40%;
+  background: currentColor;
+  opacity: 0.65;
+  border-radius: var(--r-full);
+  animation: s2u-busy-slide 900ms var(--ease) infinite;
+}
+@keyframes s2u-busy-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+/* A press is a transform and the working bar is motion for its own sake. Neither
+   is worth triggering somebody's vestibular symptoms: keep the state change,
+   drop the movement. */
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active { transform: none; background: var(--bg-hover); }
+  .is-busy::after { animation: none; width: 100%; opacity: 0.35; }
+}
+
 html,
 body {
   margin: 0;

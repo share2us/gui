@@ -44,6 +44,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   if you have chosen a folder to always save to, nothing asks at all.
 
 ### Fixed
+- **Buttons now show they were pressed.** Every button dips slightly on click,
+  and one that starts something slow, choosing files, scanning the network,
+  sending, shows a moving bar along its edge until the work is done. Pressing
+  rescan while a scan was already running used to do nothing at all, which looked
+  the same as the app hanging; it now waits for the scan in progress.
+- **The address shown for this device was sometimes the wrong one.** On a machine
+  with WSL, Hyper-V, Docker or a virtual machine installed, the app could show a
+  private address belonging to one of those, such as 172.21.208.1, while the other
+  device saw the real one, such as 192.168.10.218. The real network adapter now
+  wins.
 - **Tailscale devices were never found.** Two separate reasons, either one enough
   on its own: the app could not locate the Tailscale program on Windows or macOS,
   and its routine check for nearby devices skipped the Tailscale network
