@@ -244,8 +244,19 @@ jobs:
               & $signtool sign /sha1 $env:SIGN_THUMB /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $f
               # Fail loudly. Silence is what let this run broken for months.
               if ($LASTEXITCODE -ne 0) { throw "signtool failed for $f (exit $LASTEXITCODE)" }
-              & $signtool verify /pa $f
-              if ($LASTEXITCODE -ne 0) { throw "signature did not verify for $f" }
+              # Presence, NOT chain validity. `signtool verify /pa` applies the
+              # Authenticode policy, which requires a chain to a trusted root —
+              # something a self-signed certificate can never satisfy, so that
+              # check failed the first run after this fix even though the binary
+              # HAD just been signed ("terminated in a root"). The app's own
+              # verifier learned this already: see internal/update/verify_windows.go,
+              # which deliberately does not require Status == Valid because
+              # nothing imports our cert into a trust store (and importing one is
+              # what got the installer flagged as malware in c1f82ae).
+              # NotSigned is the failure worth catching here.
+              $sig = Get-AuthenticodeSignature $f
+              if ($sig.Status -eq 'NotSigned') { throw "no signature landed on $f" }
+              Write-Host "signed $f (status $($sig.Status), signer $($sig.SignerCertificate.Subject))"
             }
           }
 
