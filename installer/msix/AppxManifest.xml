@@ -20,7 +20,8 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  IgnorableNamespaces="uap uap5 rescap">
 
   <!-- Identity assigned by Partner Center (reserved product "Share2Us",
        Store ID 9NFR4MMM7RJ8). Must match exactly or Store ingestion rejects the
@@ -69,6 +70,38 @@
             <uap:DataFormat>Uri</uap:DataFormat>
           </uap:ShareTarget>
         </uap:Extension>
+      </Extensions>
+    </Application>
+
+    <!-- The CLI, packaged so Store users get a SIGNED s2u.
+         Windows Smart App Control refuses unsigned executables outright: no
+         per-file unblock, and clearing the mark-of-the-web does not help. A real
+         user hit that on `s2u login` (todo §RR). A trusted certificate is the
+         other answer and is blocked on a payment problem; the Store signs this
+         package with its own trusted cert, which SAC accepts, so shipping the
+         CLI inside it closes the report without buying anything.
+
+         AppExecutionAlias puts `s2u` on PATH via a shim in
+         %LOCALAPPDATA%\Microsoft\WindowsApps, so it works from any terminal
+         rather than only from the package directory.
+
+         No VisualElements tile: this is a command, not something to launch from
+         Start. uap5:AppExecutionAlias requires the Application to be visible in
+         the manifest but AppListEntry="none" keeps it out of the app list. -->
+    <Application Id="S2uCli" Executable="s2u.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        AppListEntry="none"
+        DisplayName="Share2Us CLI"
+        Description="Share files from the command line"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <uap5:Extension Category="windows.appExecutionAlias">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="s2u.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
       </Extensions>
     </Application>
   </Applications>

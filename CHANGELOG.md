@@ -16,6 +16,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+### Fixed
+- **The app and the bundled command-line tool are now actually signed.** A fault
+  in the release pipeline meant only the installer carried a signature; the two
+  programs it installs never did. Windows treats unsigned programs with more
+  suspicion, which is exactly the problem the command-line tool has been hitting.
+
+### Added
+- **The command-line tool ships inside the Microsoft Store package.** Installed
+  from the Store it is Store-signed, which is what Windows Smart App Control
+  requires, and `s2u` works from any terminal. Updates for that copy come from
+  the Store rather than the app updating itself.
+
 ## [20260908055209] - 2026-09-08
 
 ### Added
