@@ -100,6 +100,7 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 	go cleanupOldTemps() // remove staged paste/update temp dirs left by prior runs
+	a.refreshWindowTitle()
 	// Honour what the user last chose. Without this the app came up invisible
 	// every time, which is indistinguishable from the feature being broken — and
 	// is what the installer's "Receive files sent to this device" promised.
@@ -713,10 +714,20 @@ func (a *App) fileArrival(res lan.Result) {
 	// Stage, not Add: the arrival gets a name of its own inside staging so the
 	// sender's name is free for the next transfer. Without this a second copy of
 	// the same file name failed the whole transfer.
-	if _, err := incoming.Stage(res.Name, res.From, res.Path, res.Bytes); err != nil {
+	it, err := incoming.Stage(res.Name, res.From, res.Path, res.Bytes)
+	if err != nil {
 		a.notifyArrival("Received "+res.Name, "From "+res.From)
 	} else {
 		a.notifyArrival("Received "+res.Name, "From "+res.From+" · choose where to save it")
+		// Ask for the location NOW, rather than leaving a ⤓ button to be found.
+		// Approving a transfer and then seeing no file is the confusing half of
+		// this flow: the user had already said yes, so the app went quiet and the
+		// file appeared to have gone nowhere until they noticed it still had to be
+		// saved by hand. The dialog is the frontend's to open, so this only names
+		// the arrival; cancelling it leaves the file waiting exactly as before.
+		wailsRuntime.EventsEmit(a.ctx, "incoming-arrived", map[string]any{
+			"id": it.ID, "name": it.Name, "from": it.From,
+		})
 	}
 	wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
 }
@@ -1439,4 +1450,34 @@ func failAll(paths []string, err error) []ShareOutcome {
 		out = append(out, ShareOutcome{Path: p, Error: err.Error()})
 	}
 	return out
+}
+
+// refreshWindowTitle puts this machine's LAN address in the window title.
+//
+// It answers a question the app could not: standing at a second laptop, which of
+// these two machines is 192.168.15.114? The address was inside the app, in the
+// status strip, and only while discoverable — so the one moment you needed it
+// (matching a device list against the machine in front of you) was the moment it
+// might not be shown. The title bar and the taskbar entry carry it now, readable
+// without the window even being focused.
+//
+// A machine with no LAN address keeps the plain name rather than showing an
+// empty separator.
+func (a *App) refreshWindowTitle() {
+	if a.ctx == nil {
+		return
+	}
+	wailsRuntime.WindowSetTitle(a.ctx, windowTitle(a.LocalAddresses()))
+}
+
+// windowTitle names the window after this machine's LAN address.
+//
+// LocalAddresses puts private addresses first, so the first entry is the one the
+// other laptop will see in its device list. A machine with no LAN address keeps
+// the plain name rather than showing an empty separator.
+func windowTitle(addrs []string) string {
+	if len(addrs) == 0 || addrs[0] == "" {
+		return "Share2Us"
+	}
+	return "Share2Us — " + addrs[0]
 }

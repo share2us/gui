@@ -138,3 +138,54 @@ func backdate(t *testing.T, id string, when time.Time) {
 		t.Fatalf("save: %v", err)
 	}
 }
+
+// Discard is now reachable from the UI (the ✕ on an incoming row), so it gets
+// the same carve-out Sweep has. A filed arrival is the user's own file in the
+// folder they picked; the control removes it from the list, not from disk.
+func TestDiscardNeverDeletesAFiledArrival(t *testing.T) {
+	dir := isolate(t)
+	folder := filepath.Join(dir, "Downloads")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	saved := filepath.Join(folder, "report.pdf")
+	if err := os.WriteFile(saved, []byte("mine"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	it, err := AddFiled("report.pdf", "kestrel", saved, 4, folder)
+	if err != nil {
+		t.Fatalf("addfiled: %v", err)
+	}
+	if err := Discard(it.ID); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if len(List()) != 0 {
+		t.Fatal("a discarded arrival should stop being listed")
+	}
+	if _, err := os.Stat(saved); err != nil {
+		t.Fatalf("THE USER'S FILE WAS DELETED: %v", err)
+	}
+}
+
+// The other half: a staged copy nobody claimed IS deleted, or discarding would
+// leak files into the staging directory forever.
+func TestDiscardDeletesAStagedArrival(t *testing.T) {
+	isolate(t)
+	src := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(src, []byte("hi"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	it, err := Stage("notes.txt", "kestrel", src, 2)
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if err := Discard(it.ID); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if _, err := os.Stat(it.File); !os.IsNotExist(err) {
+		t.Fatalf("staged copy still on disk at %s (err %v)", it.File, err)
+	}
+	if len(List()) != 0 {
+		t.Fatal("a discarded arrival should stop being listed")
+	}
+}
