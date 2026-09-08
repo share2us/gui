@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+## [20260908111040] - 2026-09-08
+
 ### Changed
 - **The download prompt now says whether the device is who it claims.** A name on
   the network can be claimed by anything, so before downloading you see the code
