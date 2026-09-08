@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+## [20260908055209] - 2026-09-08
+
 ### Added
 - **The licence now installs with the app.** LICENSE.txt and
   THIRD-PARTY-NOTICES.txt land in the install folder. Share2Us is free software
