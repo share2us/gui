@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+## [20260908130000] - 2026-09-08
+
 ### Added
 - **Nearby devices have names again.** A device found by probing the network used
   to show as a bare address, because only the older name announcement carried a
