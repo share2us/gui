@@ -600,28 +600,13 @@ func (a *App) PeerForget(name string) error { return knownpeers.Forget(name) }
 // first. The status strip shows one; this is for the case a machine has several
 // (Ethernet and Wi-Fi, or a VPN), where the person reading a device list needs to
 // know which of them is theirs without going to look it up in the OS.
+//
+// It delegates to the receiver's own ranking rather than sorting again here.
+// This used to sort private-before-public with no interface context, so on a
+// machine with WSL or Hyper-V the strip showed 172.21.208.1 (private, and first
+// in enumeration order) while the other laptop saw 192.168.10.218.
 func (a *App) LocalAddresses() []string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return nil
-	}
-	var lan, other []string
-	for _, ad := range addrs {
-		ipNet, ok := ad.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		ip := ipNet.IP.To4()
-		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-			continue
-		}
-		if ip.IsPrivate() {
-			lan = append(lan, ip.String())
-		} else {
-			other = append(other, ip.String())
-		}
-	}
-	return append(lan, other...)
+	return lan.RankedIPv4s()
 }
 
 // SetDiscoverable turns this device's discoverable receiver on or off. While on,
@@ -1473,9 +1458,9 @@ func (a *App) refreshWindowTitle() {
 
 // windowTitle names the window after this machine's LAN address.
 //
-// LocalAddresses puts private addresses first, so the first entry is the one the
-// other laptop will see in its device list. A machine with no LAN address keeps
-// the plain name rather than showing an empty separator.
+// LocalAddresses ranks the real LAN interface above host-only ones, so the first
+// entry is the address the other laptop will actually see. A machine with no LAN
+// address keeps the plain name rather than showing an empty separator.
 func windowTitle(addrs []string) string {
 	if len(addrs) == 0 || addrs[0] == "" {
 		return "Share2Us"

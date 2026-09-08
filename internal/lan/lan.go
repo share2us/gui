@@ -15,7 +15,9 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/share2us/gui/internal/alias"
@@ -549,11 +551,30 @@ func PrimaryIP() string {
 // APIPA 169.254 link-local is last. Returns "" if no usable IPv4 exists. Mirrors
 // the receiver-side lanshare.bestAddr choice so both ends agree on the LAN IP.
 func bestLocalIPv4() string {
+	if ranked := RankedIPv4s(); len(ranked) > 0 {
+		return ranked[0]
+	}
+	return ""
+}
+
+// RankedIPv4s lists this machine's usable IPv4 addresses, most LAN-reachable
+// first, by the same scoring the receiver uses to pick the address it advertises.
+//
+// One ranking, used everywhere, because there were two: this list was sorted
+// merely private-before-public with no interface context (it came from
+// net.InterfaceAddrs, which does not carry one), while the advertised address
+// used the scorer below. A machine with WSL or Hyper-V could therefore SHOW one
+// address and be reachable on another.
+func RankedIPv4s() []string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return ""
+		return nil
 	}
-	best, bestScore := "", -1
+	type scored struct {
+		ip    string
+		score int
+	}
+	var all []scored
 	for _, ifc := range ifaces {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 			continue
@@ -563,35 +584,103 @@ func bestLocalIPv4() string {
 			continue
 		}
 		for _, a := range addrs {
-			var ip net.IP
-			switch v := a.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			v4 := ip.To4()
-			if v4 == nil {
+			v4, ok := usableIPv4(a)
+			if !ok {
 				continue
 			}
-			s := localIPv4Score(v4)
-			if s > bestScore {
-				best, bestScore = v4.String(), s
-			}
+			all = append(all, scored{v4.String(), localIPv4Score(v4, ifc)})
 		}
 	}
-	return best
+	// Stable, so two addresses that score the same keep the order the operating
+	// system reported rather than shuffling between refreshes.
+	sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
+	out := make([]string, 0, len(all))
+	for _, a := range all {
+		out = append(out, a.ip)
+	}
+	return out
 }
 
-func localIPv4Score(v4 net.IP) int {
+// usableIPv4 extracts an IPv4 address worth offering as "this device".
+//
+// The loopback check is not redundant with skipping loopback INTERFACES above:
+// an interface can carry a 127.0.0.0/8 address without the loopback flag, and
+// telling somebody their device is 127.0.0.1 is worse than telling them nothing.
+func usableIPv4(a net.Addr) (net.IP, bool) {
+	var ip net.IP
+	switch v := a.(type) {
+	case *net.IPNet:
+		ip = v.IP
+	case *net.IPAddr:
+		ip = v.IP
+	default:
+		return nil, false
+	}
+	v4 := ip.To4()
+	if v4 == nil || v4.IsLoopback() || v4.IsUnspecified() {
+		return nil, false
+	}
+	return v4, true
+}
+
+func localIPv4Score(v4 net.IP, ifc net.Interface) int {
 	switch {
 	case v4[0] == 169 && v4[1] == 254: // APIPA link-local — usually unreachable
 		return 0
-	case v4[0] == 100 && v4[1]&0xC0 == 0x40: // 100.64/10 CGNAT (Tailscale overlay)
-		return 2
-	case v4.IsPrivate(): // 10/8, 172.16/12, 192.168/16 — a real LAN
-		return 3
-	default: // other routable
+	case v4.IsPrivate() && virtualIface(ifc):
+		// A private address on a virtual adapter. This is the case that sent a
+		// user the wrong number: a machine with WSL or Hyper-V installed answers
+		// on something like 172.21.208.1, which is private, so it tied with the
+		// real 192.168.x LAN address and won on interface enumeration order —
+		// Windows tends to list vEthernet first. The other laptop, of course, saw
+		// the 192.168 one. A host-only network is reachable from nothing but this
+		// machine, so it is the least useful answer to "which one is me".
 		return 1
+	case v4[0] == 100 && v4[1]&0xC0 == 0x40: // 100.64/10 CGNAT (Tailscale overlay)
+		return 3
+	case v4.IsPrivate(): // 10/8, 172.16/12, 192.168/16 — a real LAN
+		return 4
+	default: // other routable
+		return 2
 	}
+}
+
+// virtualIface reports whether an interface is a host-only or virtual-machine
+// adapter rather than something attached to a real network.
+//
+// Two signals, because neither is sufficient alone. The MAC prefix is the
+// reliable one: those OUIs are registered to the hypervisor vendors and are not
+// localised, whereas Windows returns a FRIENDLY interface name that is
+// translated ("vEthernet (Default Switch)" is not what a German install calls
+// it). The name check is what catches the Linux and macOS cases, where the
+// bridges carry ordinary MACs but predictable names.
+//
+// Being wrong in either direction is survivable: this only orders a list of the
+// machine's own addresses, and the transfer itself still binds every interface.
+func virtualIface(ifc net.Interface) bool {
+	switch {
+	case len(ifc.HardwareAddr) >= 3:
+		switch {
+		case ifc.HardwareAddr[0] == 0x00 && ifc.HardwareAddr[1] == 0x15 && ifc.HardwareAddr[2] == 0x5D: // Hyper-V / WSL
+			return true
+		case ifc.HardwareAddr[0] == 0x00 && ifc.HardwareAddr[1] == 0x50 && ifc.HardwareAddr[2] == 0x56: // VMware
+			return true
+		case ifc.HardwareAddr[0] == 0x00 && ifc.HardwareAddr[1] == 0x0C && ifc.HardwareAddr[2] == 0x29: // VMware
+			return true
+		case ifc.HardwareAddr[0] == 0x08 && ifc.HardwareAddr[1] == 0x00 && ifc.HardwareAddr[2] == 0x27: // VirtualBox
+			return true
+		case ifc.HardwareAddr[0] == 0x0A && ifc.HardwareAddr[1] == 0x00 && ifc.HardwareAddr[2] == 0x27: // VirtualBox host-only
+			return true
+		}
+	}
+	name := strings.ToLower(ifc.Name)
+	for _, frag := range []string{
+		"vethernet", "wsl", "hyper-v", "vmware", "virtualbox", "vboxnet",
+		"docker", "br-", "virbr", "veth", "vmnet", "utun", "zt", "wg",
+	} {
+		if strings.Contains(name, frag) {
+			return true
+		}
+	}
+	return false
 }
