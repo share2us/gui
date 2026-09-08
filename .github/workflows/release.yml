@@ -255,6 +255,19 @@ jobs:
           # Use the STORE-tagged binary (updater compiled out), not the direct-
           # download build, so the packaged app never self-updates (policy 10.2.5).
           Copy-Item store-bin\share2us-gui.exe $stage\
+          # The CLI ships in the package too, so Store users get a SIGNED s2u
+          # (todo §RR: Smart App Control refuses the unsigned one outright, and
+          # the Store's own certificate is the answer that costs nothing). The
+          # binary is already here — the "wails build + fetch CLI" step above
+          # downloaded it into dist\ and it is what the installer bundles.
+          if (Test-Path 'dist\s2u.exe') {
+            Copy-Item dist\s2u.exe $stage\
+          } else {
+            # The manifest declares an Application for it, so a package without
+            # the binary would fail Store ingestion in a confusing way. Better to
+            # stop here and say why.
+            throw "dist\s2u.exe is missing - the MSIX manifest declares the CLI, so the package would be invalid. Did the CLI download step fail?"
+          }
           Copy-Item installer\msix\Assets\* $stage\Assets\
           # MSIX Version must be 4-part numeric with the 4th (revision) = 0 for the
           # Store; use the CI run number for the build part.
