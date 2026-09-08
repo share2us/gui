@@ -41,7 +41,30 @@
   --code-com: #5b6673;
   --code-tag: #f07178;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, Helvetica, Arial, sans-serif;
+  /* Kept for parity with the portal's token set, which this file adopts verbatim.
+     The app itself uses --font-mono-app below: a different, narrower stack, and
+     swapping to this one would change the face on Linux. */
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  /* The desktop window is 420px wide and needs steps the portal's ramp does not
+     have: half-steps between 12 and 15, and sizes below 12 for badges and dense
+     metadata. These are a DELIBERATE divergence, not drift — the portal is a
+     full-width web app and the same ramp need not fit both.
+     Declared here so the difference is countable in one place and can be tuned
+     as a set, rather than scattered as 39 literals. Everything that DID match
+     the shared ramp already uses --fs-*. */
+  --fs-app-lg: 14.5px;    /* one heading that sits between base and md */
+  --fs-app-md: 13.5px;    /* destination card titles */
+  --fs-app-sm: 12.5px;    /* the app's secondary text: hints, banners, empty states */
+  --fs-app-xs: 11.5px;    /* section meta and list detail */
+  --fs-app-2xs: 11px;
+  --fs-app-3xs: 10.5px;   /* inline tags: guest / login required */
+  --fs-app-4xs: 10px;     /* pills and badges */
+  --fs-app-icon: 26px;    /* the drop-canvas glyph, not text */
+
+  /* The hand-written mono stack, verbatim. It is NOT --font-mono: that one
+     reaches 'Liberation Mono' before the generic fallback, so swapping them
+     would change the face on Linux. Named rather than repeated seven times. */
+  --font-mono-app: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
   --fs-xs: 12px;
   --fs-sm: 13px;
   --fs-base: 14px;
@@ -240,7 +263,7 @@ body {
   color: var(--text-1);
   border-radius: 7px;
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   font-weight: 600;
   line-height: 1;
   transition: border-color var(--dur-fast), background 0.12s;
@@ -275,7 +298,7 @@ body {
 .banner-err {
   margin-top: 6px;
   color: var(--danger);
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
 }
 .btn-mini {
   background: var(--accent);
@@ -337,7 +360,7 @@ body {
 .files-add {
   align-self: center;
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: var(--fs-app-xs);
 }
 
 /* Drop / paste canvas (empty state) */
@@ -350,7 +373,7 @@ body {
   transition: border-color 0.15s, background 0.15s;
 }
 .canvas-ico {
-  font-size: 26px;
+  font-size: var(--fs-app-icon);
   color: var(--accent);
   line-height: 1;
 }
@@ -402,7 +425,7 @@ body.wails-drop-target-active .canvas {
   padding: 8px 6px;
   border-radius: 7px;
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   transition: background var(--dur-fast), color 0.12s;
 }
 .tab:hover:not(:disabled) {
@@ -419,7 +442,7 @@ body.wails-drop-target-active .canvas {
   opacity: 0.72;
 }
 .pill {
-  font-size: 10px;
+  font-size: var(--fs-app-4xs);
   background: var(--bg-3);
   color: var(--text-1);
   border-radius: var(--r-sm);
@@ -455,7 +478,7 @@ body.wails-drop-target-active .canvas {
 }
 .hint {
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   font-weight: 400;
   line-height: 1.4;
 }
@@ -512,7 +535,7 @@ select:focus {
   display: block;
   margin-top: 2px;
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   font-weight: 400;
   line-height: 1.4;
 }
@@ -542,7 +565,7 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
 }
 .res.err {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
@@ -633,7 +656,7 @@ select:focus {
      footer and shove the list above it. Empty it still occupies its line. */
   min-height: 1.25em;
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   line-height: 1.4;
   text-align: center;
 }
@@ -684,7 +707,7 @@ select:focus {
   padding: 7px 6px;
   border-radius: 7px;
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   font-weight: 600;
   transition: background var(--dur-fast), color 0.12s;
 }
@@ -749,7 +772,7 @@ select:focus {
   color: var(--text-1);
   border-radius: var(--r-full);
   padding: 7px 14px;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   font-weight: 600;
   cursor: pointer;
   transition: background var(--dur-fast);
@@ -758,7 +781,7 @@ select:focus {
   background: color-mix(in srgb, var(--accent) 22%, var(--bg-2));
 }
 .clip-prev {
-  font-size: 11.5px;
+  font-size: var(--fs-app-xs);
   color: var(--text-2);
   max-width: 90%;
   overflow: hidden;
@@ -787,7 +810,7 @@ select:focus {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   color: var(--text-2);
 }
 .lan-kv b {
@@ -795,10 +818,10 @@ select:focus {
   font-weight: 600;
 }
 .mono {
-  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono-app);
 }
 .lan-status {
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   color: var(--accent);
   padding-top: 2px;
 }
@@ -849,8 +872,8 @@ select:focus {
 }
 .peer-addr {
   color: var(--text-2);
-  font-size: 11.5px;
-  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--fs-app-xs);
+  font-family: var(--font-mono-app);
 }
 .peer-go {
   color: var(--accent);
@@ -887,7 +910,7 @@ select:focus {
 }
 .rcpt-hint {
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: var(--fs-app-xs);
 }
 
 /* The version line and the project links share one row. Both are always present,
@@ -898,7 +921,7 @@ select:focus {
   margin-left: auto;
 }
 .build-links .strip-link {
-  font-size: 11.5px;
+  font-size: var(--fs-app-xs);
 }
 
 /* A filed arrival is listed but not waiting: dimmer mark, same geometry. */
@@ -963,7 +986,7 @@ select:focus {
   align-items: center;
   gap: 10px;
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: var(--fs-app-xs);
 }
 .or-line::before,
 .or-line::after {
@@ -1034,16 +1057,16 @@ select:focus {
   border-radius: var(--r-lg);
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-2));
   color: var(--text-1);
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   line-height: 1.4;
 }
 .disc-bar b {
-  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono-app);
   letter-spacing: 0.5px;
 }
 .peer-code {
   flex: none;
-  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono-app);
   font-size: var(--fs-xs);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
@@ -1054,7 +1077,7 @@ select:focus {
 
 /* ── Trusted devices (LAN identity) ────────────────────────────────────── */
 .trust-badge {
-  font-size: 10px;
+  font-size: var(--fs-app-4xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1134,7 +1157,7 @@ select:focus {
   border: none;
   border-radius: 10px;
   padding: 13px;
-  font-size: 14.5px;
+  font-size: var(--fs-app-lg);
   font-weight: 650;
   cursor: pointer;
   transition: background var(--dur-fast);
@@ -1244,7 +1267,7 @@ select:focus {
 }
 .item .meta {
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: var(--fs-app-xs);
   font-weight: 400;
 }
 .item .acts {
@@ -1260,14 +1283,14 @@ select:focus {
 }
 .tag {
   flex: none;
-  font-size: 10.5px;
+  font-size: var(--fs-app-3xs);
   font-weight: 600;
   border-radius: 5px;
   padding: 1px 6px;
   letter-spacing: 0.02em;
 }
 .tag.code {
-  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono-app);
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
@@ -1278,7 +1301,7 @@ select:focus {
 }
 .empty {
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   line-height: 1.5;
   padding: 18px 8px;
   text-align: center;
@@ -1339,7 +1362,7 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 13.5px;
+  font-size: var(--fs-app-md);
   font-weight: 600;
 }
 .dest-top .dot {
@@ -1357,7 +1380,7 @@ select:focus {
 .free,
 .need {
   margin-left: auto;
-  font-size: 10.5px;
+  font-size: var(--fs-app-3xs);
   font-weight: 600;
   border-radius: 5px;
   padding: 2px 7px;
@@ -1386,13 +1409,13 @@ select:focus {
   border-radius: 7px;
   color: var(--text-1);
   padding: 8px 10px;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
 }
 .mini-dev {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
 }
 .mini-dev .n {
   flex: 1;
@@ -1442,7 +1465,7 @@ select:focus {
 
 /* ══ Broadcast detail: live connections + stats ═════════════════════════ */
 .stat-strip {
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   color: var(--text-2);
 }
 .stat-strip b {
@@ -1464,7 +1487,7 @@ select:focus {
   align-items: center;
   gap: 10px;
   padding: 7px 0;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
 }
 .conn .cn {
   flex: 1;
@@ -1502,7 +1525,7 @@ select:focus {
 
 /* Download-trust warning line */
 .warn-line {
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   line-height: 1.5;
   color: var(--text-1);
   background: var(--warning-soft);
@@ -1514,7 +1537,7 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   color: var(--text-1);
 }
 .chk2 select {
@@ -1534,7 +1557,7 @@ select:focus {
   border-radius: var(--r-lg);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
   padding: 10px 13px;
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
   color: var(--text-1);
   opacity: 0;
   transform: translateY(-8px);
@@ -1553,8 +1576,8 @@ select:focus {
   border-radius: 7px;
   color: var(--text-1);
   padding: 9px 11px;
-  font-size: 12.5px;
-  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--fs-app-sm);
+  font-family: var(--font-mono-app);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1617,7 +1640,7 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
   border-top: 1px solid var(--border);
   background: var(--bg-0);
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--fs-app-2xs);
   line-height: 1.4;
   text-align: right;
   cursor: pointer;
@@ -1627,7 +1650,7 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 }
 .build-strip:hover { color: var(--text-1); }
 .build-ver {
-  font-family: SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
+  font-family: var(--font-mono-app);
   color: var(--text-1);
 }
 
@@ -1658,7 +1681,7 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
   color: var(--text-2);
   border-radius: var(--r-md);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-app-2xs);
   line-height: 1;
   display: grid;
   place-items: center;
@@ -1732,7 +1755,7 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 .upd-panel .upd-body {
   padding: var(--s4) var(--s5);
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--fs-app-sm);
 }
 .upd-cur {
   color: var(--text-3);
@@ -1779,7 +1802,7 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
   font-size: var(--fs-xs); font-weight: 800;
 }
 .shai-soon {
-  font-size: 10px; font-weight: 700;
+  font-size: var(--fs-app-4xs); font-weight: 700;
   letter-spacing: .04em; text-transform: uppercase;
   color: var(--warning);
   background: var(--warning-soft);
