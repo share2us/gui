@@ -16,6 +16,47 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+### Added
+- **Nearby devices have names again.** A device found by probing the network used
+  to show as a bare address, because only the older name announcement carried a
+  name and that announcement is blocked on a lot of networks: Windows machines set
+  to Public, anything on a different subnet, and every device reached over
+  Tailscale. Each device now publishes its own name, signed with its identity, so
+  nobody else on the network can claim it.
+- **You can give a device your own name.** Three laptops called DESKTOP-4F2K9A is
+  not a security problem and is still an unusable list. Press the pencil beside a
+  device to name it. Only you see the name, it does not rename the other device,
+  and it does not trust it. The name sticks to the device itself, so it survives
+  the device changing address, moving network, or restarting.
+- **This device's address is now always in the bar at the bottom**, and in the
+  window title. Before it was only shown while you were discoverable, which is the
+  opposite of when you need it: you go looking for your address while working out
+  why the other laptop cannot see you.
+- **You can cancel a file you did not want.** Every incoming file now has an X
+  beside it. A file you have not saved yet asks first, because deleting it cannot
+  be undone; one already saved to your folder just leaves the list, and the file
+  stays where you put it.
+
+### Changed
+- **Accepting a file now asks where to put it straight away.** Before, you
+  approved the transfer and then nothing appeared to happen, because the file was
+  waiting for you to find a save button. Cancelling still leaves it waiting, and
+  if you have chosen a folder to always save to, nothing asks at all.
+
+### Fixed
+- **Tailscale devices were never found.** Two separate reasons, either one enough
+  on its own: the app could not locate the Tailscale program on Windows or macOS,
+  and its routine check for nearby devices skipped the Tailscale network
+  altogether, so a device could only appear on a manual refresh at best.
+- **A device restarting no longer looks like an impostor.** The app was
+  remembering devices by a value that changes every time they restart, so an
+  ordinary reboot came back as a warning that the device was not the one you sent
+  to last time. It now remembers the device's real identity, which does not change,
+  and the warning is kept for what it was meant for.
+- **The code shown for a device now matches the code that device shows.** The
+  6-digit code beside a device in the list and the code in that same device's
+  transfer prompt were two different numbers.
+
 ## [20260908111040] - 2026-09-08
 
 ### Changed
