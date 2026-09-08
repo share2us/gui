@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A merge to main with this
      section empty cuts NO release; write a line here and the merge ships. -->
 
+## [20260908063848] - 2026-09-08
+
 ### Fixed
 - **The app and the bundled command-line tool are now actually signed.** A fault
   in the release pipeline meant only the installer carried a signature; the two
