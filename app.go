@@ -50,6 +50,10 @@ type App struct {
 	// Explorer "Share" verb (share2us-windows.exe share "<path>" ...).
 	pending []string
 
+	// chosen records the paths the user actually picked, so a binding cannot be
+	// asked to act on an arbitrary file (§AJ #26).
+	chosen pathVault
+
 	mu     sync.Mutex
 	client *core.Client // lazily loaded from the saved credential
 
@@ -89,7 +93,11 @@ const (
 
 // NewApp constructs the app with the paths selected in Explorer (may be empty).
 func NewApp(pending []string) *App {
-	return &App{pending: pending}
+	a := &App{pending: pending}
+	// The Explorer "Share" verb hands these to us from the OS: the user chose
+	// them in the shell (§AJ #26).
+	a.chosen.allow(pending...)
+	return a
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -97,6 +105,7 @@ func (a *App) startup(ctx context.Context) {
 	// Native file drop: forward dropped file paths to the modal.
 	wailsRuntime.OnFileDrop(ctx, func(_, _ int, paths []string) {
 		if len(paths) > 0 {
+			a.chosen.allow(paths...) // a native drop is the user choosing (§AJ #26)
 			wailsRuntime.EventsEmit(ctx, "files-dropped", paths)
 		}
 	})
@@ -290,6 +299,7 @@ func (a *App) PickFiles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	a.chosen.allow(paths...)
 	return paths, nil
 }
 
@@ -331,6 +341,9 @@ type ShareOutcome struct {
 // Share dispatches each path to the chosen destination and returns per-path
 // outcomes. Errors are captured per row so one failure does not abort the rest.
 func (a *App) Share(req ShareRequest) []ShareOutcome {
+	if err := a.chosen.check(req.Paths); err != nil {
+		return failAll(req.Paths, err)
+	}
 	c, err := a.clientOrErr()
 	if err != nil {
 		return failAll(req.Paths, err)
@@ -413,6 +426,9 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 // pairing string) or a plain host / host:port; password is used only when the
 // code does not already carry one. Progress is emitted as "lan-send-progress".
 func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
+	if err := a.chosen.check(paths); err != nil {
+		return failAll(paths, err)
+	}
 	dest = strings.TrimSpace(dest)
 	if dest == "" {
 		return failAll(paths, errors.New("enter the receiver's address"))
@@ -737,7 +753,16 @@ func (a *App) IncomingFolder() string { return incoming.Folder() }
 
 // SetIncomingFolder picks the folder arrivals go to from now on. An empty string
 // restores asking each time, so the choice is reversible.
-func (a *App) SetIncomingFolder(dir string) error { return incoming.SetFolder(dir) }
+func (a *App) SetIncomingFolder(dir string) error {
+	// "" restores asking each time, which is always allowed. Any other folder
+	// must be one the user picked (§AJ #26).
+	if strings.TrimSpace(dir) != "" {
+		if err := a.chosen.check([]string{dir}); err != nil {
+			return err
+		}
+	}
+	return incoming.SetFolder(dir)
+}
 
 // ChooseIncomingFolder opens the native folder picker and remembers the result.
 func (a *App) ChooseIncomingFolder() (string, error) {
@@ -747,6 +772,7 @@ func (a *App) ChooseIncomingFolder() (string, error) {
 	if err != nil || dir == "" {
 		return "", err
 	}
+	a.chosen.allow(dir)
 	return dir, incoming.SetFolder(dir)
 }
 
@@ -1000,6 +1026,9 @@ type BroadcastState struct {
 // StartBroadcast offers path to nearby devices (pull) with the given access mode
 // ("all" | "trusted" | "approve", default approve). Replaces any current broadcast.
 func (a *App) StartBroadcast(path, access string) (BroadcastState, error) {
+	if err := a.chosen.check([]string{path}); err != nil {
+		return BroadcastState{}, err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return BroadcastState{}, err
