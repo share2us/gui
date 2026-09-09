@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	clicore "github.com/share2us/cli-core"
 	"github.com/share2us/gui/internal/core"
 )
 
@@ -208,7 +209,28 @@ func Get(id string) (Item, bool) {
 }
 
 // Folder is the remembered save location, or "" for "ask every time".
+//
+// This is the SAME setting as the CLI's `s2u config set-receive-dir` plus
+// set-receive-auto (§AG D3): the desktop app and the command line are one
+// product on one machine, and two independent answers to "where do my files go"
+// is the confusion this section exists to end. The shared config is authority;
+// the local index.json is read only to adopt a folder chosen before the two were
+// joined, which is what keeps an existing install saving where it always has.
+//
+// "Auto off" and "no folder" are the same state here, because that is what the
+// desktop app has always meant by it: nothing is written until you choose.
 func Folder() string {
+	config, err := clicore.LoadConfig()
+	if err == nil {
+		if settings := config.ReceiveSettings(); settings.AutoAnswered {
+			if !settings.Auto {
+				return "" // asked to be asked
+			}
+			return settings.Dir
+		}
+	}
+	// Unanswered: adopt a folder this app remembered before the settings were
+	// joined, so an existing install is not silently switched to asking.
 	mu.Lock()
 	defer mu.Unlock()
 	s, _ := load()
@@ -217,7 +239,22 @@ func Folder() string {
 
 // SetFolder remembers where arrivals should go from now on. Passing "" restores
 // asking each time, so the choice is never a trap.
+//
+// Writes BOTH stores: the shared config is what everything reads, and the local
+// index keeps its copy so an older build (or a rollback) still behaves.
 func SetFolder(dir string) error {
+	if dir == "" {
+		if err := clicore.SetReceiveAuto(false); err != nil {
+			return err
+		}
+	} else {
+		if err := clicore.SetReceiveDir(dir); err != nil {
+			return err
+		}
+		if err := clicore.SetReceiveAuto(true); err != nil {
+			return err
+		}
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	s, err := load()

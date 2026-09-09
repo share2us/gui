@@ -4,6 +4,7 @@
 package incoming
 
 import (
+	clicore "github.com/share2us/cli-core"
 	"os"
 	"path/filepath"
 	"testing"
@@ -234,5 +235,105 @@ func TestDeliverFallsBackToStagingWhenTheFolderIsUnusable(t *testing.T) {
 	}
 	if _, err := os.Stat(got.Path); err != nil {
 		t.Fatalf("the file was lost: %v", err)
+	}
+}
+
+// ---- §AG D3: the desktop folder and the CLI setting are ONE setting ---------
+
+// Two independent answers to "where do my files go" is the confusion §AG exists
+// to end. Choosing a folder in the app must be the same act as
+// `s2u config set-receive-dir`.
+func TestSetFolderWritesTheSharedConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	folder := t.TempDir()
+
+	if err := SetFolder(folder); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := clicore.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := config.ReceiveSettings()
+	if settings.Dir != folder {
+		t.Fatalf("shared receive dir = %q, want %q", settings.Dir, folder)
+	}
+	if !settings.Auto || !settings.AutoAnswered {
+		t.Fatalf("choosing a folder means files are saved automatically: %+v", settings)
+	}
+	if got := Folder(); got != folder {
+		t.Fatalf("Folder() = %q, want %q", got, folder)
+	}
+}
+
+// "Ask each time" is the same state as auto-off, because that is what the
+// desktop app has always meant by it.
+func TestAskEachTimeTurnsOffAutoInTheSharedConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SetFolder(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetFolder(""); err != nil {
+		t.Fatal(err)
+	}
+
+	config, _ := clicore.LoadConfig()
+	settings := config.ReceiveSettings()
+	if settings.Auto {
+		t.Fatal("asking each time must turn automatic saving off")
+	}
+	if !settings.AutoAnswered {
+		t.Fatal("choosing to be asked IS an answer")
+	}
+	if got := Folder(); got != "" {
+		t.Fatalf("Folder() = %q, want empty (ask each time)", got)
+	}
+}
+
+// An install that chose a folder before the two settings were joined must keep
+// saving where it always has, rather than silently switching to asking.
+func TestFolderAdoptsAPreJoinChoice(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	legacy := t.TempDir()
+
+	// Write the local index directly: the shape an older build left behind.
+	mu.Lock()
+	s, _ := load()
+	s.Folder = legacy
+	_ = save(s)
+	mu.Unlock()
+
+	if got := Folder(); got != legacy {
+		t.Fatalf("Folder() = %q, want the previously chosen %q", got, legacy)
+	}
+}
+
+// Once the shared config has an answer, it is the authority -- a stale local
+// index must not override a later choice made from the CLI.
+func TestSharedConfigWinsOverTheLocalIndex(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	mu.Lock()
+	s, _ := load()
+	s.Folder = "/stale/local/choice"
+	_ = save(s)
+	mu.Unlock()
+
+	chosen := t.TempDir()
+	if err := clicore.SetReceiveDir(chosen); err != nil {
+		t.Fatal(err)
+	}
+	if err := clicore.SetReceiveAuto(true); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := Folder(); got != chosen {
+		t.Fatalf("Folder() = %q, want the shared config's %q", got, chosen)
 	}
 }
