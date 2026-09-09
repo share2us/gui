@@ -17,6 +17,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      section empty cuts NO release; write a line here and the merge ships. -->
 
 ### Added
+- **"Only me": upload a file without sharing it with anyone.** A third option on
+  the "Create a link" tab, beside "Anyone with the link" and "Only these people".
+  The file goes into your account and is shared with nobody — the link only opens
+  for you. Sign in on another of your machines, paste the link, and you have the
+  file. Until now the app could only make a link anyone could open or one gated
+  on an email address, so there was no way to simply put a file somewhere you
+  could reach it later.
 - **Nearby devices have names again.** A device found by probing the network used
   to show as a bare address, because only the older name announcement carried a
   name and that announcement is blocked on a lot of networks: Windows machines set
