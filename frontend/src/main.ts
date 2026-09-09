@@ -121,7 +121,7 @@ interface AppBackend {
 const backend = (): AppBackend => (window as any).go.main.App;
 
 type View = 'home' | 'share' | 'broadcast';
-type Dest = 'nearby' | 'broadcast' | 'public' | 'private';
+type Dest = 'nearby' | 'broadcast' | 'public' | 'private' | 'only-me';
 
 const state = {
   view: 'home' as View,
@@ -523,10 +523,15 @@ function logRow(a: Activity): string {
 }
 
 function shareResultOverlay(r: { name: string; link: string; kind: string }): string {
-  const title = r.kind === 'private' ? 'Private link ready' : 'Public link ready';
+  const title =
+    r.kind === 'only-me' ? 'Uploaded privately' : r.kind === 'private' ? 'Private link ready' : 'Public link ready';
   return `<div class="overlay"><div class="overlay-card">
     <div class="overlay-title">${title}</div>
-    <div class="overlay-body"><b>${escapeHtml(r.name)}</b> is shared. The link is on your clipboard:</div>
+    <div class="overlay-body">${
+      r.kind === 'only-me'
+        ? `<b>${escapeHtml(r.name)}</b> is in your account and shared with nobody. The link is on your clipboard — it only opens for you:`
+        : `<b>${escapeHtml(r.name)}</b> is shared. The link is on your clipboard:`
+    }</div>
     <input class="link-field" id="share-link" type="text" readonly value="${escapeHtml(r.link)}" />
     <div class="overlay-actions"><button class="btn-hdr" id="share-done">Done</button><button class="btn-accept" id="share-copy">Copy link</button></div>
   </div></div>`;
@@ -631,9 +636,17 @@ function destPicker(loggedIn: boolean): string {
              value="${escapeHtml(state.recipients)}" />
       <div class="rcpt-hint">Comma-separated. Each person signs in with that address to open it.</div>
     </div>`;
+  // "Only me" is a real share with a real link — it just opens for nobody but
+  // this account. It is the way to put a file in Share2Us without handing it to
+  // anyone, which the two options above could not express: one shares with
+  // everybody holding the link, the other demands at least one email address.
+  const onlyMeBody = `
+    <div style="font-size:12px;color:var(--text-2)">Stored in your account. Nobody else can open the link — not even with the URL. Sign in on another device and paste the link there to get the file.</div>
+    ${options}`;
   return (
     opt('public', 'Anyone with the link', loggedIn ? '' : need, options) +
-    opt('private', 'Only these people', loggedIn ? '' : need, recipientsRow + options)
+    opt('private', 'Only these people', loggedIn ? '' : need, recipientsRow + options) +
+    opt('only-me', 'Only me', loggedIn ? '' : need, onlyMeBody)
   );
 }
 
@@ -976,7 +989,19 @@ function primaryLabel(): string {
     const target = state.picked?.name || state.netDest.trim();
     return n && target ? `Send ${files} to ${target}` : `Send ${files}`;
   }
+  if (state.dest === 'only-me') {
+    // Not "Create link": the point of this destination is that the file is
+    // uploaded and NOT shared. Naming it "create link" would describe the
+    // mechanism and hide the meaning.
+    return n ? `Upload ${files} privately` : 'Upload privately';
+  }
   return n ? `Create link for ${files}` : 'Create link';
+}
+
+// The three destinations that create a cloud share, as opposed to a direct
+// device transfer. All three need a login.
+function isCloudLink(d: Dest): boolean {
+  return d === 'public' || d === 'private' || d === 'only-me';
 }
 
 // Derived from footerReason so the two can never disagree. They did: the reason
@@ -989,7 +1014,7 @@ function canPrimary(): boolean {
 }
 function footerReason(): string {
   if (!state.paths.length) return 'Add a file above to share.';
-  if ((state.dest === 'public' || state.dest === 'private') && !state.status?.loggedIn) return 'Login to share to the cloud.';
+  if (isCloudLink(state.dest) && !state.status?.loggedIn) return 'Login to share to the cloud.';
   if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter its address.';
   // Broadcast offers ONE file for others to pull. Silently sending only the first
   // of several is the fault this replaces; say so and point at the path that does

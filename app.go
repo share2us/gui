@@ -303,7 +303,7 @@ func (a *App) ListDevices() ([]core.Device, error) {
 }
 
 // ShareRequest is the modal's submit payload. Target selects the destination:
-// "public" | "private" | "device" | "contact".
+// "public" | "private" | "only-me" | "device" | "contact".
 type ShareRequest struct {
 	Paths        []string `json:"paths"`
 	Target       string   `json:"target"`
@@ -348,19 +348,28 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 		err error
 	)
 	switch req.Target {
-	case "public", "private":
+	case "public", "private", "only-me":
 		vis := core.Public
-		if req.Target == "private" {
+		switch req.Target {
+		case "private":
 			vis = core.Private
+		case "only-me":
+			vis = core.OnlyMe
 		}
 		var allow *bool
 		if vis == core.Private && req.AllowReshare {
 			allow = &req.AllowReshare
 		}
+		// "Only me" has no recipients by definition; never forward any the modal
+		// may still be holding from a switch between destinations.
+		recipients := req.Recipients
+		if vis == core.OnlyMe {
+			recipients = nil
+		}
 		res, err = c.ShareLink(a.ctx, core.LinkRequest{
 			Path:         path,
 			Visibility:   vis,
-			Recipients:   req.Recipients,
+			Recipients:   recipients,
 			Password:     req.Password,
 			OneTime:      req.OneTime,
 			Expires:      req.Expires,
@@ -389,6 +398,8 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "link", Name: filepath.Base(path), Size: sz, Peer: "public link", Link: res.Link})
 	case "private":
 		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "link", Name: filepath.Base(path), Size: sz, Peer: "private link", Link: res.Link})
+	case "only-me":
+		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "link", Name: filepath.Base(path), Size: sz, Peer: "only me", Link: res.Link})
 	case "device", "contact":
 		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "sent", Name: filepath.Base(path), Size: sz, Peer: firstNonEmptyStr(req.Email, "a device")})
 	}
