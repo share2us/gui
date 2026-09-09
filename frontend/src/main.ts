@@ -158,6 +158,7 @@ const state = {
   incomingFolder: '' as string, // remembered destination; '' means ask each time
   pendingRemember: '' as string, // folder just used, offered as the default once
   peerPrompt: null as PeerPrompt | null, // W-M4: asked on first sight, and when a known device changes identity
+  settingsOpen: false as boolean, // survives re-renders; see settingsBlock()
   shaiOpen: false as boolean,
   updateOpen: false as boolean,
   updateChecking: false as boolean,
@@ -1015,9 +1016,48 @@ function expiryRow(): string { return `<label class="fld">Expires<select id="exp
 function passwordRow(): string { return `<label class="fld">Password <span class="hint">optional</span><input id="password" type="password" placeholder="leave blank for none" autocomplete="off" /></label>`; }
 function checkRow(id: string, label: string): string { return `<label class="setting-row"><input type="checkbox" id="${id}" /><span class="setting-label">${label}</span></label>`; }
 
+// accountDevicesBlock lists the machines signed in to this account, and whether
+// each can actually receive a file.
+//
+// The send modal already lists them, but only once you are mid-send: "is my
+// laptop set up to receive?" is a question people ask BEFORE picking a file, and
+// answering it should not require starting a share you may not want. It is the
+// desktop counterpart of `s2u devices`, and deliberately reports the same three
+// states in the same words.
+function accountDevicesBlock(): string {
+  if (!state.status?.loggedIn) return '';
+  const body = () => {
+    if (state.cloudDevicesLoading) return `<div class="hint">Looking for your devices…</div>`;
+    if (state.cloudDevicesError) return `<div class="hint">${escapeHtml(state.cloudDevicesError)}</div>`;
+    if (!state.cloudDevices.length) return `<div class="hint">Only this one so far. Sign in on another machine and it appears here.</div>`;
+    return state.cloudDevices
+      .map((d) => {
+        const note = d.current
+          ? 'this device'
+          : d.hasKey
+            ? 'ready to receive'
+            : "can't receive yet — sign in with Share2Us on it";
+        return `<div class="mini-dev"><span class="n"><b>${escapeHtml(d.name)}</b> <small>${escapeHtml(note)}</small></span></div>`;
+      })
+      .join('');
+  };
+  return `<div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px">
+    <span class="setting-label" style="display:flex;justify-content:space-between;align-items:center">
+      Your devices
+      <button class="btn-hdr" id="devices-refresh" ${state.cloudDevicesLoading ? 'disabled' : ''}>Refresh</button>
+    </span>
+    <div style="min-height:38px">${body()}</div>
+  </div>`;
+}
+
 function settingsBlock(): string {
   const s = state.status!;
-  return `<details class="settings"${'' /* closed by default */}>
+  // The open state lives in `state`, not just in the DOM. render() rebuilds this
+  // element, so a DOM-only <details open> collapsed the panel on every re-render
+  // -- including the ones the panel's OWN controls trigger (toggling
+  // "Discoverable" closed Settings under you). Anything that re-renders while
+  // Settings is open used to shut it.
+  return `<details class="settings"${state.settingsOpen ? ' open' : ''}>
     <summary class="settings-summary" aria-hidden="true" tabindex="-1">Settings</summary>
     <div class="settings-body">
       <label class="setting-row"><input type="checkbox" id="set-discoverable" ${s.discoverable ? 'checked' : ''} /><span class="setting-label">Discoverable on local network<span class="setting-help">Nearby devices can send you files — trusted ones land automatically, others ask.</span></span></label>
@@ -1025,6 +1065,7 @@ function settingsBlock(): string {
       <label class="setting-row"><input type="checkbox" id="set-shell" ${s.shellInstalled ? 'checked' : ''} /><span class="setting-label">Right-click Share menu</span></label>
       <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${s.autostartEnabled ? 'checked' : ''} ${s.canReceive ? '' : 'disabled'} /><span class="setting-label">Start Share2Us at login<span class="setting-help">So it is already running to receive files. Being found by other devices also needs “Discoverable on local network” above.</span></span></label>
       <label class="setting-row${state.storeManaged ? ' is-disabled' : ''}"><input type="checkbox" id="set-beta" ${state.updateChannel === 'beta' ? 'checked' : ''} ${state.storeManaged ? 'disabled' : ''} /><span class="setting-label">Get beta builds<span class="setting-help">${state.storeManaged ? 'The Microsoft Store manages updates for this install.' : 'Pre-release builds before they reach everyone. Also switches the s2u command line on this machine.'}</span></span></label>
+      ${accountDevicesBlock()}
       ${trustedBlock()}
       <button class="btn-mini" id="clear-activity" ${state.activity.length ? '' : 'disabled'}
               title="${state.activity.length ? 'Remove the recent-activity list from this device' : 'Nothing to clear yet'}">Clear activity log</button>
@@ -1678,11 +1719,21 @@ function wire() {
   // to collapse this, so a strip link that could only ever open it left the user
   // stuck with Settings expanded.
   on('#open-settings', 'click', () => {
-    const d = root.querySelector<HTMLDetailsElement>('details.settings');
-    if (!d) return;
-    d.open = !d.open;
-    if (d.open) d.scrollIntoView({ block: 'nearest' });
+    state.settingsOpen = !state.settingsOpen;
+    render();
+    if (!state.settingsOpen) return;
+    root.querySelector<HTMLDetailsElement>('details.settings')?.scrollIntoView({ block: 'nearest' });
+    // Fetch the device list the first time Settings is opened, not at startup:
+    // it is a network call, and most sessions never look at it. The block
+    // reserves its height, so filling it in does not move anything.
+    if (state.status?.loggedIn && !state.cloudDevices.length && !state.cloudDevicesLoading) void loadCloudDevices();
   });
+  // Clicking the <summary> toggles natively; mirror that into state so the next
+  // render agrees with what the user sees.
+  root.querySelector<HTMLDetailsElement>('details.settings')?.addEventListener('toggle', (e) => {
+    state.settingsOpen = (e.currentTarget as HTMLDetailsElement).open;
+  });
+  on('#devices-refresh', 'click', (e) => { e.stopPropagation(); void loadCloudDevices(); });
   on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
   on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');

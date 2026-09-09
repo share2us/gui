@@ -125,3 +125,77 @@ describe('a login is required', () => {
     expect((m.$('#primary-btn') as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+// "Is my laptop set up to receive?" is a question people ask BEFORE picking a
+// file. The send modal could answer it, but only once you were mid-send —
+// starting a share you may not want just to read a status.
+describe('the devices list in Settings', () => {
+  it('lists the account\'s devices with the same states as the send flow', async () => {
+    const m = await mount({ ListDevices: async () => [laptop, keyless, thisMachine] });
+    await click(m, '#open-settings');
+
+    expect(m.text()).toContain('Your devices');
+    expect(m.text()).toContain('laptop');
+    expect(m.text()).toMatch(/ready to receive/i);
+    expect(m.text()).toMatch(/can't receive yet/i);
+    // Unlike the send flow this DOES show the current machine: the question here
+    // is what the account looks like, not where a file can go.
+    expect(m.text()).toContain('openclaw');
+  });
+
+  // A network call most sessions never need should not run at startup.
+  it('does not fetch until Settings is opened', async () => {
+    const m = await mount({ ListDevices: async () => [laptop] });
+    expect(m.calls.ListDevices).toBeUndefined();
+    await click(m, '#open-settings');
+    expect(m.calls.ListDevices?.length).toBe(1);
+  });
+
+  it('can be refreshed', async () => {
+    const m = await mount({ ListDevices: async () => [laptop] });
+    await click(m, '#open-settings');
+    await click(m, '#devices-refresh');
+    expect(m.calls.ListDevices?.length).toBe(2);
+  });
+
+  it('says so when there are no other devices, rather than showing nothing', async () => {
+    const m = await mount({ ListDevices: async () => [] });
+    await click(m, '#open-settings');
+    expect(m.text()).toMatch(/Only this one so far/i);
+  });
+
+  it('is not shown when signed out', async () => {
+    const m = await mount({
+      ListDevices: async () => [laptop],
+      Status: async () => ({
+        loggedIn: false, email: '', isApiToken: false, canReceive: false,
+        shellInstalled: false, autostartEnabled: false, discoverable: true,
+      }),
+    });
+    await click(m, '#open-settings');
+    expect(m.text()).not.toContain('Your devices');
+    expect(m.calls.ListDevices).toBeUndefined();
+  });
+});
+
+// Settings used to hold its open state only in the DOM, and render() rebuilds
+// that element -- so ANY re-render while Settings was open shut it, including
+// the ones its own controls trigger. Loading the device list is one such
+// re-render, which is how this surfaced.
+describe('Settings survives a re-render', () => {
+  it('stays open while the device list loads', async () => {
+    const m = await mount({ ListDevices: async () => [laptop] });
+    await click(m, '#open-settings');
+    await m.settle(20); // let the fetch resolve and re-render
+    expect((m.$('details.settings') as HTMLDetailsElement).open).toBe(true);
+    expect(m.text()).toContain('laptop');
+  });
+
+  it('stays open when one of its own controls re-renders the page', async () => {
+    const m = await mount({ ListDevices: async () => [laptop] });
+    await click(m, '#open-settings');
+    await click(m, '#set-discoverable');
+    await m.settle(20);
+    expect((m.$('details.settings') as HTMLDetailsElement).open).toBe(true);
+  });
+});
