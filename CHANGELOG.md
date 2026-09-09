@@ -19,6 +19,28 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 ## [20260908130000] - 2026-09-08
 
 ### Added
+- **See your devices in Settings.** The machines signed in to your account, and
+  whether each one is ready to receive a file or still needs you to sign in on
+  it. Previously you could only find this out by starting a share.
+- **Send to your own devices over the internet, not just across the network.**
+  "My device, anywhere" sits beside the nearby options in the send flow: pick one
+  of the machines signed in to your account and the file goes there, encrypted
+  end to end, from anywhere. The app could already do this — nothing in it
+  reached the feature, so it only existed in the command line.
+- **Files you are sent no longer appear in Downloads without you choosing.**
+  Files sent to this device now wait until you say where they go, or go straight
+  to the folder you picked — the same way files received over the local network
+  already behaved. Two other things came with it: a second file of the same name
+  no longer overwrites the first, and a save folder that has gone away (an
+  unplugged drive, a revoked permission) leaves the file waiting instead of
+  losing it.
+- **"Only me": upload a file without sharing it with anyone.** A third option on
+  the "Create a link" tab, beside "Anyone with the link" and "Only these people".
+  The file goes into your account and is shared with nobody — the link only opens
+  for you. Sign in on another of your machines, paste the link, and you have the
+  file. Until now the app could only make a link anyone could open or one gated
+  on an email address, so there was no way to simply put a file somewhere you
+  could reach it later.
 - **Nearby devices have names again.** A device found by probing the network used
   to show as a bare address, because only the older name announcement carried a
   name and that announcement is blocked on a lot of networks: Windows machines set
@@ -46,6 +68,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   if you have chosen a folder to always save to, nothing asks at all.
 
 ### Fixed
+- **Buttons that are waiting on something now say so.** Several — installing an
+  update, signing out, choosing a folder, answering an incoming transfer — sat
+  there looking unclicked while they worked. They now show the same working
+  indicator the rest of the app uses.
+- **Settings no longer closes itself.** Changing a setting inside it (toggling
+  "Discoverable on local network", for instance) collapsed the whole panel.
 - **Buttons now show they were pressed.** Every button dips slightly on click,
   and one that starts something slow, choosing files, scanning the network,
   sending, shows a moving bar along its edge until the work is done. Pressing
@@ -68,6 +96,26 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 - **The code shown for a device now matches the code that device shows.** The
   6-digit code beside a device in the list and the code in that same device's
   transfer prompt were two different numbers.
+
+### Security
+- **The app now acts only on files you actually chose.** Sharing, sending over
+  the network, broadcasting and picking a receive folder each took whatever path
+  they were handed. Nothing could reach them today — the pages are the app's own
+  and external links open in your browser — but if anything ever did, a single
+  call would have been enough to upload a file you never picked. A path is now
+  usable only when it came from the file picker, a drag onto the window, the
+  folder picker, or the "Share" menu in Explorer.
+- **Peer names from the network can no longer write into the app's own text.** A
+  device chooses its display name, and that name was shown untouched. It is now
+  stripped of anything that can reorder or hide what you are reading.
+- **Trusted devices are verified against keys built into the app**, and against
+  the account you are signed in to. The list used to be checked with a key kept
+  in the same file, so anything able to write that file could add itself as a
+  trusted device and have its files saved without asking.
+- **Files kept for an in-flight transfer are cleared when you sign out**, and
+  removed from disk when they expire rather than merely ignored.
+- Dependency advisories: `x/net` v0.56.0 (a panic a remote peer could trigger)
+  and `x/text` v0.39.0.
 
 ## [20260908111040] - 2026-09-08
 
