@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/share2us/gui/internal/core"
 )
 
 // Item is one arrival waiting to be filed.
@@ -327,4 +329,49 @@ func Sweep(maxAge time.Duration) int {
 		}
 	}
 	return n
+}
+
+// Delivered is the outcome of Deliver: where the file ended up, and whether it
+// is waiting for the user to say where it belongs.
+type Delivered struct {
+	Item Item
+	// Path is where the file is now: the chosen folder when Filed, the staging
+	// copy otherwise.
+	Path string
+	// Filed is true when a remembered folder took it and there is nothing left
+	// for the user to decide.
+	Filed bool
+}
+
+// Deliver disposes of an arrival according to the one rule that governs every
+// incoming file, whatever brought it in (§AG D1):
+//
+//   - a remembered folder takes it, and the caller says where it went;
+//   - otherwise it waits in staging until the user chooses.
+//
+// It exists so the desktop window and the headless tray/`--receive` receiver
+// cannot drift apart: before this, LAN arrivals staged (the 2026-09-07 decision
+// that "the user never chose, and afterwards had to go looking for it") while
+// cloud device-sends were written straight into the Downloads folder — the exact
+// behaviour that decision replaced.
+//
+// srcPath is consumed: on success the file has been moved. A failure to file
+// into the chosen folder FALLS BACK to staging rather than erroring, so a bad
+// folder (unplugged drive, revoked permission) never loses somebody's file.
+func Deliver(name, from, srcPath string, size int64) (Delivered, error) {
+	if folder := Folder(); folder != "" {
+		dest := core.UniquePath(filepath.Join(folder, filepath.Base(name)))
+		if err := move(srcPath, dest); err == nil {
+			// Still listed: a remembered folder means "stop asking me", not "hide
+			// it from me". Retention stops listing a filed arrival but never
+			// deletes it.
+			it, err := AddFiled(name, from, dest, size, folder)
+			return Delivered{Item: it, Path: dest, Filed: true}, err
+		}
+	}
+	it, err := Stage(name, from, srcPath, size)
+	if err != nil {
+		return Delivered{Path: srcPath}, err
+	}
+	return Delivered{Item: it, Path: it.File}, nil
 }

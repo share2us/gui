@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/share2us/gui/internal/core"
+	"github.com/share2us/gui/internal/incoming"
 )
 
 // DefaultInterval matches the CLI's `receive --watch` cadence.
@@ -41,6 +42,46 @@ func DownloadsDir() string {
 		return "."
 	}
 	return filepath.Join(home, "Downloads")
+}
+
+// StagingLoop is Loop, except that each arrival is disposed of by
+// incoming.Deliver rather than written straight into destDir (§AG D1).
+//
+// The distinction matters: cloud device-sends used to be written into the
+// Downloads folder and announced with a toast, which is precisely the behaviour
+// the 2026-09-07 staging decision replaced for LAN transfers — "the user never
+// chose, and afterwards had to go looking for it". One arrival path, one rule.
+//
+// Files are fetched into the staging directory first, so a download that is
+// interrupted leaves nothing in a folder the user watches.
+func StagingLoop(ctx context.Context, p Poller, interval time.Duration, onEvent func(Event)) {
+	staging, err := incoming.StagePath()
+	if err != nil {
+		// Without a staging directory there is nowhere safe to put anything.
+		// Report it rather than silently falling back to writing into Downloads,
+		// which is the behaviour being replaced.
+		onEvent(Event{Err: err})
+		return
+	}
+	Loop(ctx, p, staging, interval, func(e Event) {
+		if e.Err != nil {
+			onEvent(e)
+			return
+		}
+		delivered := make([]core.Received, 0, len(e.Received))
+		for _, r := range e.Received {
+			got, derr := incoming.Deliver(r.FileName, r.From, r.SavedTo, 0)
+			if derr != nil && got.Item.ID == "" {
+				onEvent(Event{Err: derr})
+				continue
+			}
+			r.SavedTo = got.Path
+			delivered = append(delivered, r)
+		}
+		if len(delivered) > 0 {
+			onEvent(Event{Received: delivered})
+		}
+	})
 }
 
 // Loop polls immediately and then every interval until ctx is cancelled. onEvent
