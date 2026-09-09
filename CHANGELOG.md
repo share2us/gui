@@ -17,6 +17,9 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      section empty cuts NO release; write a line here and the merge ships. -->
 
 ### Added
+- **See your devices in Settings.** The machines signed in to your account, and
+  whether each one is ready to receive a file or still needs you to sign in on
+  it. Previously you could only find this out by starting a share.
 - **Send to your own devices over the internet, not just across the network.**
   "My device, anywhere" sits beside the nearby options in the send flow: pick one
   of the machines signed in to your account and the file goes there, encrypted
@@ -63,6 +66,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   if you have chosen a folder to always save to, nothing asks at all.
 
 ### Fixed
+- **Buttons that are waiting on something now say so.** Several — installing an
+  update, signing out, choosing a folder, answering an incoming transfer — sat
+  there looking unclicked while they worked. They now show the same working
+  indicator the rest of the app uses.
+- **Settings no longer closes itself.** Changing a setting inside it (toggling
+  "Discoverable on local network", for instance) collapsed the whole panel.
 - **Buttons now show they were pressed.** Every button dips slightly on click,
   and one that starts something slow, choosing files, scanning the network,
   sending, shows a moving bar along its edge until the work is done. Pressing
