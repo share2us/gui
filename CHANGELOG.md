@@ -17,6 +17,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      section empty cuts NO release; write a line here and the merge ships. -->
 
 ### Added
+- **Send to your own devices over the internet, not just across the network.**
+  "My device, anywhere" sits beside the nearby options in the send flow: pick one
+  of the machines signed in to your account and the file goes there, encrypted
+  end to end, from anywhere. The app could already do this — nothing in it
+  reached the feature, so it only existed in the command line.
+- **Files you are sent no longer appear in Downloads without you choosing.**
+  Files sent to this device now wait until you say where they go, or go straight
+  to the folder you picked — the same way files received over the local network
+  already behaved. Two other things came with it: a second file of the same name
+  no longer overwrites the first, and a save folder that has gone away (an
+  unplugged drive, a revoked permission) leaves the file waiting instead of
+  losing it.
 - **"Only me": upload a file without sharing it with anyone.** A third option on
   the "Create a link" tab, beside "Anyone with the link" and "Only these people".
   The file goes into your account and is shared with nobody — the link only opens
