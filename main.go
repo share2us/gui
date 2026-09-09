@@ -15,6 +15,7 @@ import (
 	"github.com/gen2brain/beeep"
 	"github.com/share2us/gui/internal/autostart"
 	"github.com/share2us/gui/internal/core"
+	"github.com/share2us/gui/internal/incoming"
 	"github.com/share2us/gui/internal/prefs"
 	"github.com/share2us/gui/internal/receiver"
 	"github.com/share2us/gui/internal/sharetarget"
@@ -128,7 +129,10 @@ func parseArgs(args []string) (pending []string, quit bool) {
 		exitOn("disable autostart", autostart.Disable())
 		return nil, true
 	case "--receive":
-		dir := receiver.DownloadsDir()
+		// A folder named here is an explicit choice, so it is honoured directly.
+		// Without one, arrivals go through staging rather than into a location
+		// nobody picked (§AG D1).
+		dir := ""
 		if len(args) > 1 && args[1] != "" {
 			dir = args[1]
 		}
@@ -152,9 +156,12 @@ func exitOn(what string, err error) {
 	}
 }
 
-// runReceive polls the inbox and saves incoming files into dir until interrupted,
-// popping a native toast for each batch. This is the headless background receiver
-// launched at login by autostart.
+// runReceive polls the inbox until interrupted, popping a native toast for each
+// batch. This is the headless background receiver launched at login by autostart.
+//
+// An explicit dir is written to directly: naming a folder on the command line IS
+// the user choosing one, which is the whole thing staging exists to obtain. With
+// no dir, arrivals go through staging and wait for that choice.
 func runReceive(dir string) {
 	c, err := core.Load()
 	if err != nil {
@@ -167,17 +174,23 @@ func runReceive(dir string) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	fmt.Printf("Share2Us: receiving to %s (Ctrl-C to stop)\n", dir)
-	receiver.Loop(ctx, c, dir, receiver.DefaultInterval, func(e receiver.Event) {
+	onEvent := func(e receiver.Event) {
 		if e.Err != nil {
 			fmt.Fprintln(os.Stderr, "receive:", e.Err)
 			return
 		}
 		for _, r := range e.Received {
-			fmt.Printf("saved %s%s\n", r.FileName, fromSuffix(r.From))
+			fmt.Printf("saved %s%s -> %s\n", r.FileName, fromSuffix(r.From), r.SavedTo)
 		}
 		notifyReceived(e.Received)
-	})
+	}
+	if dir != "" {
+		fmt.Printf("Share2Us: receiving to %s (Ctrl-C to stop)\n", dir)
+		receiver.Loop(ctx, c, dir, receiver.DefaultInterval, onEvent)
+		return
+	}
+	fmt.Println("Share2Us: receiving (Ctrl-C to stop)")
+	receiver.StagingLoop(ctx, c, receiver.DefaultInterval, onEvent)
 }
 
 func notifyReceived(rs []core.Received) {
@@ -209,7 +222,6 @@ func runTray() {
 	}
 	defer lock.Release()
 
-	dir := receiver.DownloadsDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	// Receive in the background when signed in with a device key; toast on arrival.
 	// If the s2u daemon (ADR-035) is already running and owns the receiver, defer
@@ -218,7 +230,7 @@ func runTray() {
 	// when no daemon is installed, so this is a no-op for most users.
 	c, err := core.Load()
 	if err == nil && c.HasDeviceKey() && !daemonctl.OwnsReceiver() {
-		go receiver.Loop(ctx, c, dir, receiver.DefaultInterval, func(e receiver.Event) {
+		go receiver.StagingLoop(ctx, c, receiver.DefaultInterval, func(e receiver.Event) {
 			if e.Err == nil {
 				notifyReceived(e.Received)
 			}
@@ -242,13 +254,23 @@ func runTray() {
 		icon = trayIconICO
 	}
 	tray.Run(tray.Options{
-		Icon:            icon,
-		Tooltip:         "Share2Us",
-		OnOpen:          launchSelf,
-		OnOpenDownloads: func() { openPath(dir) },
-		OnUpdate:        launchSelf, // open the window; the banner has the Install button
-		OnQuit:          cancel,
-		UpdateReady:     updateReady,
+		Icon:    icon,
+		Tooltip: "Share2Us",
+		OnOpen:  launchSelf,
+		// Opens where files actually go: the folder the user chose, or the
+		// Downloads default when they have not chosen one yet. Reading it per
+		// click rather than once at startup means changing the setting takes
+		// effect without restarting the tray.
+		OnOpenDownloads: func() {
+			if folder := incoming.Folder(); folder != "" {
+				openPath(folder)
+				return
+			}
+			openPath(receiver.DownloadsDir())
+		},
+		OnUpdate:    launchSelf, // open the window; the banner has the Install button
+		OnQuit:      cancel,
+		UpdateReady: updateReady,
 	})
 }
 

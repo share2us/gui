@@ -20,6 +20,11 @@ const (
 	Public Visibility = "public"
 	// Private restricts the share to the listed recipient emails.
 	Private Visibility = "private"
+	// OnlyMe uploads without sharing: the share is recipient-restricted with NO
+	// recipients, which the gateway resolves to "only an active user of the
+	// owning account" (ADR-022). The link is real and works on the owner's other
+	// signed-in devices; it opens for nobody else.
+	OnlyMe Visibility = "only-me"
 )
 
 // LinkRequest describes a public/private LINK share of a single file.
@@ -68,6 +73,12 @@ func (c *Client) ShareLink(ctx context.Context, req LinkRequest) (Result, error)
 		recipients = nil
 		allowReshare = nil
 	}
+	// "Only me" is a private share with nobody on the list. Resharing is
+	// meaningless with no recipients, so it is never sent.
+	if req.Visibility == OnlyMe {
+		recipients = nil
+		allowReshare = nil
+	}
 	return c.runUpload(ctx, p.path, p.size, clicore.UploadCreateRequest{
 		FileName:     p.name,
 		SizeBytes:    uint64(p.size),
@@ -77,6 +88,7 @@ func (c *Client) ShareLink(ctx context.Context, req LinkRequest) (Result, error)
 		NoExpiry:     noExpiry,
 		SHA256:       sum,
 		New:          true,
+		Visibility:   apiVisibility(req.Visibility),
 		Password:     req.Password,
 		OneTime:      req.OneTime,
 		Recipients:   recipients,
@@ -84,6 +96,16 @@ func (c *Client) ShareLink(ctx context.Context, req LinkRequest) (Result, error)
 		AllowReshare: allowReshare,
 		Note:         req.Note,
 	})
+}
+
+// apiVisibility maps the UI's choice to the API's visibility field. Both Private
+// and OnlyMe are recipient-restricted server-side; they differ only in whether
+// any recipients are sent. Public leaves the field empty (the server default).
+func apiVisibility(v Visibility) string {
+	if v == Private || v == OnlyMe {
+		return "private"
+	}
+	return ""
 }
 
 // SendToDevice sends path to one of the account's OWN devices, sealed to that
@@ -223,6 +245,20 @@ func (c *Client) runUpload(ctx context.Context, uploadPath string, size int64, r
 		PublicID:  created.Share.PublicID,
 		Link:      firstNonEmpty(created.Link, created.Share.Link),
 		ExpiresAt: created.ExpiresAt,
+	}
+	// STOP BEFORE UPLOADING BYTES if a private share did not come back private.
+	// An older server ignores the visibility field and returns a PUBLIC link with
+	// a 201, and we would then upload the file and show the user a link anyone
+	// could open. Failing here leaves a share row with no content, so nothing is
+	// reachable. `known` is the distinction that matters: silence is not a "no".
+	if req.Visibility == "private" {
+		private, known := created.Share.IsPrivate()
+		if !known {
+			return Result{}, errors.New("this server can't create private shares yet (it would have made a public link). Nothing was uploaded.")
+		}
+		if !private {
+			return Result{}, errors.New("the server did not make this share private. Nothing was uploaded.")
+		}
 	}
 	if !created.SkippedUpload && created.Upload.URL != "" && created.UploadSessionID != "" {
 		f, err := os.Open(uploadPath)

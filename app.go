@@ -50,6 +50,10 @@ type App struct {
 	// Explorer "Share" verb (share2us-windows.exe share "<path>" ...).
 	pending []string
 
+	// chosen records the paths the user actually picked, so a binding cannot be
+	// asked to act on an arbitrary file (§AJ #26).
+	chosen pathVault
+
 	mu     sync.Mutex
 	client *core.Client // lazily loaded from the saved credential
 
@@ -89,7 +93,11 @@ const (
 
 // NewApp constructs the app with the paths selected in Explorer (may be empty).
 func NewApp(pending []string) *App {
-	return &App{pending: pending}
+	a := &App{pending: pending}
+	// The Explorer "Share" verb hands these to us from the OS: the user chose
+	// them in the shell (§AJ #26).
+	a.chosen.allow(pending...)
+	return a
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -97,6 +105,7 @@ func (a *App) startup(ctx context.Context) {
 	// Native file drop: forward dropped file paths to the modal.
 	wailsRuntime.OnFileDrop(ctx, func(_, _ int, paths []string) {
 		if len(paths) > 0 {
+			a.chosen.allow(paths...) // a native drop is the user choosing (§AJ #26)
 			wailsRuntime.EventsEmit(ctx, "files-dropped", paths)
 		}
 	})
@@ -290,6 +299,7 @@ func (a *App) PickFiles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	a.chosen.allow(paths...)
 	return paths, nil
 }
 
@@ -303,7 +313,7 @@ func (a *App) ListDevices() ([]core.Device, error) {
 }
 
 // ShareRequest is the modal's submit payload. Target selects the destination:
-// "public" | "private" | "device" | "contact".
+// "public" | "private" | "only-me" | "device" | "contact".
 type ShareRequest struct {
 	Paths        []string `json:"paths"`
 	Target       string   `json:"target"`
@@ -331,6 +341,9 @@ type ShareOutcome struct {
 // Share dispatches each path to the chosen destination and returns per-path
 // outcomes. Errors are captured per row so one failure does not abort the rest.
 func (a *App) Share(req ShareRequest) []ShareOutcome {
+	if err := a.chosen.check(req.Paths); err != nil {
+		return failAll(req.Paths, err)
+	}
 	c, err := a.clientOrErr()
 	if err != nil {
 		return failAll(req.Paths, err)
@@ -348,19 +361,28 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 		err error
 	)
 	switch req.Target {
-	case "public", "private":
+	case "public", "private", "only-me":
 		vis := core.Public
-		if req.Target == "private" {
+		switch req.Target {
+		case "private":
 			vis = core.Private
+		case "only-me":
+			vis = core.OnlyMe
 		}
 		var allow *bool
 		if vis == core.Private && req.AllowReshare {
 			allow = &req.AllowReshare
 		}
+		// "Only me" has no recipients by definition; never forward any the modal
+		// may still be holding from a switch between destinations.
+		recipients := req.Recipients
+		if vis == core.OnlyMe {
+			recipients = nil
+		}
 		res, err = c.ShareLink(a.ctx, core.LinkRequest{
 			Path:         path,
 			Visibility:   vis,
-			Recipients:   req.Recipients,
+			Recipients:   recipients,
 			Password:     req.Password,
 			OneTime:      req.OneTime,
 			Expires:      req.Expires,
@@ -389,6 +411,8 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "link", Name: filepath.Base(path), Size: sz, Peer: "public link", Link: res.Link})
 	case "private":
 		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "link", Name: filepath.Base(path), Size: sz, Peer: "private link", Link: res.Link})
+	case "only-me":
+		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "link", Name: filepath.Base(path), Size: sz, Peer: "only me", Link: res.Link})
 	case "device", "contact":
 		lanid.ActivityAppend(lanid.ActivityEntry{Kind: "sent", Name: filepath.Base(path), Size: sz, Peer: firstNonEmptyStr(req.Email, "a device")})
 	}
@@ -402,6 +426,9 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 // pairing string) or a plain host / host:port; password is used only when the
 // code does not already carry one. Progress is emitted as "lan-send-progress".
 func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
+	if err := a.chosen.check(paths); err != nil {
+		return failAll(paths, err)
+	}
 	dest = strings.TrimSpace(dest)
 	if dest == "" {
 		return failAll(paths, errors.New("enter the receiver's address"))
@@ -674,53 +701,46 @@ func stageDir() string {
 // notification for Firebase later is one substitution rather than a hunt
 // through the receive paths.
 func (a *App) fileArrival(res lan.Result) {
-	folder := incoming.Folder()
-	if folder != "" {
-		// UniquePath, not the bare name: filing into a folder that already holds
-		// that name used to rename straight over it, destroying the earlier file
-		// with no prompt and no record. A second "report.pdf" now lands as
-		// "report (1).pdf".
-		dest := core.UniquePath(filepath.Join(folder, filepath.Base(res.Name)))
-		if err := os.Rename(res.Path, dest); err == nil {
-			// Still list it. A remembered folder means "stop asking me", not "hide
-			// it from me" — the user must be able to send this one somewhere else
-			// without going to Settings and switching back to "Ask each time".
-			// Retention never deletes a filed arrival; it only stops listing it.
-			_, _ = incoming.AddFiled(res.Name, res.From, dest, res.Bytes, folder)
-			a.notifyArrival(res.Name+" saved", "From "+res.From+" · "+folder)
-			wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
-				"name": res.Name, "path": dest, "bytes": res.Bytes, "from": res.From,
-			})
-			wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
-			return
-		}
-		// Could not file it where they asked; fall through so it waits rather
-		// than disappearing.
+	a.arrival(res.Name, res.From, res.Path, res.Bytes)
+}
+
+// arrival is the one place an incoming file is disposed of, whatever brought it
+// in. LAN transfers went through here already; cloud device-sends did NOT — the
+// tray receiver wrote them straight into the Downloads folder and toasted,
+// which is exactly the behaviour the 2026-09-07 staging decision replaced for
+// LAN ("the user never chose, and afterwards had to go looking for it"). One
+// arrival path, one rule (§AG D1).
+func (a *App) arrival(name, from, path string, size int64) {
+	// incoming.Deliver owns the rule (remembered folder, else staging) so the
+	// window and the headless tray cannot drift apart. This function owns only
+	// what is specific to a running window: notifications and frontend events.
+	got, err := incoming.Deliver(name, from, path, size)
+	if err != nil && got.Item.ID == "" {
+		a.notifyArrival("Received "+name, "From "+from)
+		wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
+		return
 	}
-	// Stage, not Add: the arrival gets a name of its own inside staging so the
-	// sender's name is free for the next transfer. Without this a second copy of
-	// the same file name failed the whole transfer.
-	it, err := incoming.Stage(res.Name, res.From, res.Path, res.Bytes)
-	if err != nil {
-		a.notifyArrival("Received "+res.Name, "From "+res.From)
-	} else {
-		a.notifyArrival("Received "+res.Name, "From "+res.From+" · choose where to save it")
-		// Ask for the location NOW, rather than leaving a ⤓ button to be found.
-		// Approving a transfer and then seeing no file is the confusing half of
-		// this flow: the user had already said yes, so the app went quiet and the
-		// file appeared to have gone nowhere until they noticed it still had to be
-		// saved by hand. The dialog is the frontend's to open, so this only names
-		// the arrival; cancelling it leaves the file waiting exactly as before.
-		wailsRuntime.EventsEmit(a.ctx, "incoming-arrived", map[string]any{
-			"id": it.ID, "name": it.Name, "from": it.From,
+	if got.Filed {
+		a.notifyArrival(name+" saved", "From "+from+" · "+got.Item.SavedTo)
+		wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
+			"name": name, "path": got.Path, "bytes": size, "from": from,
 		})
+		wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
+		return
 	}
+	a.notifyArrival("Received "+name, "From "+from+" · choose where to save it")
+	// Ask for the location NOW, rather than leaving a ⤓ button to be found.
+	// Approving a transfer and then seeing no file is the confusing half of this
+	// flow: the user had already said yes, so the app went quiet and the file
+	// appeared to have gone nowhere until they noticed it still had to be saved
+	// by hand. The dialog is the frontend's to open, so this only names the
+	// arrival; cancelling it leaves the file waiting exactly as before.
+	wailsRuntime.EventsEmit(a.ctx, "incoming-arrived", map[string]any{
+		"id": got.Item.ID, "name": got.Item.Name, "from": got.Item.From,
+	})
 	wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
 }
 
-// notifyArrival is the single place an arrival is announced. Firebase Cloud
-// Messaging replaces the body of this function later; nothing else needs to
-// know.
 func (a *App) notifyArrival(title, body string) {
 	_ = beeep.Notify("Share2Us: "+title, body, "")
 }
@@ -733,7 +753,16 @@ func (a *App) IncomingFolder() string { return incoming.Folder() }
 
 // SetIncomingFolder picks the folder arrivals go to from now on. An empty string
 // restores asking each time, so the choice is reversible.
-func (a *App) SetIncomingFolder(dir string) error { return incoming.SetFolder(dir) }
+func (a *App) SetIncomingFolder(dir string) error {
+	// "" restores asking each time, which is always allowed. Any other folder
+	// must be one the user picked (§AJ #26).
+	if strings.TrimSpace(dir) != "" {
+		if err := a.chosen.check([]string{dir}); err != nil {
+			return err
+		}
+	}
+	return incoming.SetFolder(dir)
+}
 
 // ChooseIncomingFolder opens the native folder picker and remembers the result.
 func (a *App) ChooseIncomingFolder() (string, error) {
@@ -743,6 +772,7 @@ func (a *App) ChooseIncomingFolder() (string, error) {
 	if err != nil || dir == "" {
 		return "", err
 	}
+	a.chosen.allow(dir)
 	return dir, incoming.SetFolder(dir)
 }
 
@@ -996,6 +1026,9 @@ type BroadcastState struct {
 // StartBroadcast offers path to nearby devices (pull) with the given access mode
 // ("all" | "trusted" | "approve", default approve). Replaces any current broadcast.
 func (a *App) StartBroadcast(path, access string) (BroadcastState, error) {
+	if err := a.chosen.check([]string{path}); err != nil {
+		return BroadcastState{}, err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return BroadcastState{}, err

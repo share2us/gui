@@ -14,6 +14,8 @@ type ShareRequest = {
   paths: string[];
   target: string;
   recipients?: string[];
+  deviceId?: string;
+  devicePub?: string;
   password?: string;
   oneTime?: boolean;
   expires?: string;
@@ -67,12 +69,17 @@ type Activity = { kind: string; peer: string; name: string; size: number; ts: nu
 type BcConn = { fingerprint: string; name: string; peer: string; sent: number; total: number; done: boolean; err: string };
 type BroadcastState = { active: boolean; name: string; size: number; access: string; downloading: BcConn[]; completed: BcConn[] };
 type DownloadResult = { name: string; fingerprint: string; from: string; trusted: boolean };
+// One of the account's own signed-in devices, reachable over the internet rather
+// than the local network. hasKey is false until that device has signed in and
+// registered an encryption key, and a device without one cannot be sent to.
+type CloudDevice = { sessionId: string; name: string; label: string; publicKey: string; hasKey: boolean; current: boolean };
 
 interface AppBackend {
   Status(): Promise<Status>;
   PendingPaths(): Promise<string[]>;
   PickFiles(): Promise<string[]>;
   Share(req: ShareRequest): Promise<ShareOutcome[]>;
+  ListDevices(): Promise<CloudDevice[]>;
   BeginLogin(): Promise<LoginInfo>;
   CompleteLogin(): Promise<Status>;
   SetAutostart(on: boolean): Promise<void>;
@@ -121,7 +128,7 @@ interface AppBackend {
 const backend = (): AppBackend => (window as any).go.main.App;
 
 type View = 'home' | 'share' | 'broadcast';
-type Dest = 'nearby' | 'broadcast' | 'public' | 'private';
+type Dest = 'nearby' | 'broadcast' | 'mydevice' | 'public' | 'private' | 'only-me';
 
 const state = {
   view: 'home' as View,
@@ -151,6 +158,7 @@ const state = {
   incomingFolder: '' as string, // remembered destination; '' means ask each time
   pendingRemember: '' as string, // folder just used, offered as the default once
   peerPrompt: null as PeerPrompt | null, // W-M4: asked on first sight, and when a known device changes identity
+  settingsOpen: false as boolean, // survives re-renders; see settingsBlock()
   shaiOpen: false as boolean,
   updateOpen: false as boolean,
   updateChecking: false as boolean,
@@ -170,6 +178,10 @@ const state = {
   optionsOpen: false as boolean,
   netDest: '' as string,
   recipients: '' as string, // typed into the private-link path; survives a repaint
+  cloudDevices: [] as CloudDevice[], // the account's own devices, for an over-the-internet send
+  cloudDevicesLoading: false as boolean,
+  cloudDevicesError: '' as string,
+  pickedCloud: null as { sessionId: string; publicKey: string; name: string } | null,
   // login
   loginPhase: 'idle' as 'idle' | 'waiting' | 'error',
   loginInfo: null as LoginInfo | null,
@@ -523,10 +535,15 @@ function logRow(a: Activity): string {
 }
 
 function shareResultOverlay(r: { name: string; link: string; kind: string }): string {
-  const title = r.kind === 'private' ? 'Private link ready' : 'Public link ready';
+  const title =
+    r.kind === 'only-me' ? 'Uploaded privately' : r.kind === 'private' ? 'Private link ready' : 'Public link ready';
   return `<div class="overlay"><div class="overlay-card">
     <div class="overlay-title">${title}</div>
-    <div class="overlay-body"><b>${escapeHtml(r.name)}</b> is shared. The link is on your clipboard:</div>
+    <div class="overlay-body">${
+      r.kind === 'only-me'
+        ? `<b>${escapeHtml(r.name)}</b> is in your account and shared with nobody. The link is on your clipboard — it only opens for you:`
+        : `<b>${escapeHtml(r.name)}</b> is shared. The link is on your clipboard:`
+    }</div>
     <input class="link-field" id="share-link" type="text" readonly value="${escapeHtml(r.link)}" />
     <div class="overlay-actions"><button class="btn-hdr" id="share-done">Done</button><button class="btn-accept" id="share-copy">Copy link</button></div>
   </div></div>`;
@@ -607,9 +624,24 @@ function destPicker(loggedIn: boolean): string {
       ${bcMode('approve', 'Approve each', 'you allow every download')}
     </div>`;
 
+  // Sending to your own device OVER THE INTERNET. The Go side has always been
+  // able to do this (App.Share target "device", App.ListDevices); nothing in the
+  // UI reached it, so the only device sends the app offered were LAN ones and
+  // the feature was invisible outside the CLI (§AG Gap 1).
+  //
+  // Deliberately its own option rather than mixed into "A device on this
+  // network": the two have different requirements (a login and a registered
+  // encryption key, versus being on the same LAN) and different failure modes,
+  // and merging them would make an offline-capable transfer look like it needs
+  // an account.
+  const myDeviceBody = `
+    <div style="font-size:12px;color:var(--text-2)">Encrypted end-to-end and sent through Share2Us, so it works from anywhere — not just this network.</div>
+    ${cloudDeviceList()}`;
+
   if (state.sendMode === 'device') {
     return (
       opt('nearby', 'A device on this network', guest, nearbyBody) +
+      opt('mydevice', 'My device, anywhere', loggedIn ? '' : need, myDeviceBody) +
       opt('broadcast', 'Everyone nearby', guest, bcBody)
     );
   }
@@ -631,12 +663,71 @@ function destPicker(loggedIn: boolean): string {
              value="${escapeHtml(state.recipients)}" />
       <div class="rcpt-hint">Comma-separated. Each person signs in with that address to open it.</div>
     </div>`;
+  // "Only me" is a real share with a real link — it just opens for nobody but
+  // this account. It is the way to put a file in Share2Us without handing it to
+  // anyone, which the two options above could not express: one shares with
+  // everybody holding the link, the other demands at least one email address.
+  const onlyMeBody = `
+    <div style="font-size:12px;color:var(--text-2)">Stored in your account. Nobody else can open the link — not even with the URL. Sign in on another device and paste the link there to get the file.</div>
+    ${options}`;
   return (
     opt('public', 'Anyone with the link', loggedIn ? '' : need, options) +
-    opt('private', 'Only these people', loggedIn ? '' : need, recipientsRow + options)
+    opt('private', 'Only these people', loggedIn ? '' : need, recipientsRow + options) +
+    opt('only-me', 'Only me', loggedIn ? '' : need, onlyMeBody)
   );
 }
 
+
+// cloudDeviceList renders the account's own devices. Space is reserved for the
+// loading and empty states so the card does not reflow as the list arrives.
+function cloudDeviceList(): string {
+  if (!state.status?.loggedIn) return '';
+  if (state.cloudDevicesLoading) {
+    return `<div class="hint" style="min-height:38px">Looking for your devices…</div>`;
+  }
+  if (state.cloudDevicesError) {
+    return `<div class="warn-line" style="min-height:38px">${escapeHtml(state.cloudDevicesError)}
+      <button class="btn-mini" id="cloud-retry" title="Try again">Retry</button></div>`;
+  }
+  // "current" is this machine: sending a file to the device you are sitting at
+  // is never what you meant, and offering it invites a confusing no-op.
+  const devices = state.cloudDevices.filter((d) => !d.current);
+  if (!devices.length) {
+    return `<div class="hint" style="min-height:38px">No other devices are signed in to your account yet. Install Share2Us on another machine and sign in there, and it will appear here.</div>`;
+  }
+  return devices
+    .map((d) => {
+      const picked = state.pickedCloud?.sessionId === d.sessionId;
+      // A device with no encryption key cannot be sealed to. It is shown rather
+      // than hidden, because "my laptop is missing" is a worse puzzle than a
+      // dimmed row that says why.
+      const why = d.hasKey ? '' : ' — sign in with the app on that device first';
+      return `<div class="mini-dev${picked ? ' picked' : ''}"${d.hasKey ? '' : ' style="opacity:.55"'}>
+        <span class="n"><b>${escapeHtml(d.name)}</b>${escapeHtml(why)}</span>
+        <button class="ib${picked ? ' on' : ''} pick-cloud" data-session="${escapeHtml(d.sessionId)}"
+          data-key="${escapeHtml(d.publicKey)}" data-name="${escapeHtml(d.name)}"
+          ${d.hasKey ? '' : 'disabled'}
+          title="${d.hasKey ? (picked ? 'Selected' : 'Select this device') : 'This device has no encryption key yet'}"
+          style="margin-left:4px">${picked ? '✓' : '→'}</button>
+      </div>`;
+    })
+    .join('');
+}
+
+async function loadCloudDevices(): Promise<void> {
+  if (!state.status?.loggedIn) return;
+  state.cloudDevicesLoading = true;
+  state.cloudDevicesError = '';
+  render();
+  try {
+    state.cloudDevices = (await backend().ListDevices()) || [];
+  } catch (e) {
+    state.cloudDevicesError = String(e);
+  } finally {
+    state.cloudDevicesLoading = false;
+    render();
+  }
+}
 
 function bcMode(m: string, label: string, sub: string): string {
   return `<div class="mode ${state.bcAccess === m ? 'on' : ''}" data-bc-mode="${m}"
@@ -925,9 +1016,48 @@ function expiryRow(): string { return `<label class="fld">Expires<select id="exp
 function passwordRow(): string { return `<label class="fld">Password <span class="hint">optional</span><input id="password" type="password" placeholder="leave blank for none" autocomplete="off" /></label>`; }
 function checkRow(id: string, label: string): string { return `<label class="setting-row"><input type="checkbox" id="${id}" /><span class="setting-label">${label}</span></label>`; }
 
+// accountDevicesBlock lists the machines signed in to this account, and whether
+// each can actually receive a file.
+//
+// The send modal already lists them, but only once you are mid-send: "is my
+// laptop set up to receive?" is a question people ask BEFORE picking a file, and
+// answering it should not require starting a share you may not want. It is the
+// desktop counterpart of `s2u devices`, and deliberately reports the same three
+// states in the same words.
+function accountDevicesBlock(): string {
+  if (!state.status?.loggedIn) return '';
+  const body = () => {
+    if (state.cloudDevicesLoading) return `<div class="hint">Looking for your devices…</div>`;
+    if (state.cloudDevicesError) return `<div class="hint">${escapeHtml(state.cloudDevicesError)}</div>`;
+    if (!state.cloudDevices.length) return `<div class="hint">Only this one so far. Sign in on another machine and it appears here.</div>`;
+    return state.cloudDevices
+      .map((d) => {
+        const note = d.current
+          ? 'this device'
+          : d.hasKey
+            ? 'ready to receive'
+            : "can't receive yet — sign in with Share2Us on it";
+        return `<div class="mini-dev"><span class="n"><b>${escapeHtml(d.name)}</b> <small>${escapeHtml(note)}</small></span></div>`;
+      })
+      .join('');
+  };
+  return `<div class="setting-row" style="flex-direction:column;align-items:stretch;gap:6px">
+    <span class="setting-label" style="display:flex;justify-content:space-between;align-items:center">
+      Your devices
+      <button class="btn-hdr" id="devices-refresh" ${state.cloudDevicesLoading ? 'disabled' : ''}>Refresh</button>
+    </span>
+    <div style="min-height:38px">${body()}</div>
+  </div>`;
+}
+
 function settingsBlock(): string {
   const s = state.status!;
-  return `<details class="settings"${'' /* closed by default */}>
+  // The open state lives in `state`, not just in the DOM. render() rebuilds this
+  // element, so a DOM-only <details open> collapsed the panel on every re-render
+  // -- including the ones the panel's OWN controls trigger (toggling
+  // "Discoverable" closed Settings under you). Anything that re-renders while
+  // Settings is open used to shut it.
+  return `<details class="settings"${state.settingsOpen ? ' open' : ''}>
     <summary class="settings-summary" aria-hidden="true" tabindex="-1">Settings</summary>
     <div class="settings-body">
       <label class="setting-row"><input type="checkbox" id="set-discoverable" ${s.discoverable ? 'checked' : ''} /><span class="setting-label">Discoverable on local network<span class="setting-help">Nearby devices can send you files — trusted ones land automatically, others ask.</span></span></label>
@@ -935,6 +1065,7 @@ function settingsBlock(): string {
       <label class="setting-row"><input type="checkbox" id="set-shell" ${s.shellInstalled ? 'checked' : ''} /><span class="setting-label">Right-click Share menu</span></label>
       <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${s.autostartEnabled ? 'checked' : ''} ${s.canReceive ? '' : 'disabled'} /><span class="setting-label">Start Share2Us at login<span class="setting-help">So it is already running to receive files. Being found by other devices also needs “Discoverable on local network” above.</span></span></label>
       <label class="setting-row${state.storeManaged ? ' is-disabled' : ''}"><input type="checkbox" id="set-beta" ${state.updateChannel === 'beta' ? 'checked' : ''} ${state.storeManaged ? 'disabled' : ''} /><span class="setting-label">Get beta builds<span class="setting-help">${state.storeManaged ? 'The Microsoft Store manages updates for this install.' : 'Pre-release builds before they reach everyone. Also switches the s2u command line on this machine.'}</span></span></label>
+      ${accountDevicesBlock()}
       ${trustedBlock()}
       <button class="btn-mini" id="clear-activity" ${state.activity.length ? '' : 'disabled'}
               title="${state.activity.length ? 'Remove the recent-activity list from this device' : 'Nothing to clear yet'}">Clear activity log</button>
@@ -976,7 +1107,23 @@ function primaryLabel(): string {
     const target = state.picked?.name || state.netDest.trim();
     return n && target ? `Send ${files} to ${target}` : `Send ${files}`;
   }
+  if (state.dest === 'mydevice') {
+    const target = state.pickedCloud?.name;
+    return n && target ? `Send ${files} to ${target}` : `Send ${files}`;
+  }
+  if (state.dest === 'only-me') {
+    // Not "Create link": the point of this destination is that the file is
+    // uploaded and NOT shared. Naming it "create link" would describe the
+    // mechanism and hide the meaning.
+    return n ? `Upload ${files} privately` : 'Upload privately';
+  }
   return n ? `Create link for ${files}` : 'Create link';
+}
+
+// The three destinations that create a cloud share, as opposed to a direct
+// device transfer. All three need a login.
+function isCloudLink(d: Dest): boolean {
+  return d === 'public' || d === 'private' || d === 'only-me';
 }
 
 // Derived from footerReason so the two can never disagree. They did: the reason
@@ -989,8 +1136,10 @@ function canPrimary(): boolean {
 }
 function footerReason(): string {
   if (!state.paths.length) return 'Add a file above to share.';
-  if ((state.dest === 'public' || state.dest === 'private') && !state.status?.loggedIn) return 'Login to share to the cloud.';
+  if (isCloudLink(state.dest) && !state.status?.loggedIn) return 'Login to share to the cloud.';
   if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter its address.';
+  if (state.dest === 'mydevice' && !state.status?.loggedIn) return 'Login to send to your own devices.';
+  if (state.dest === 'mydevice' && !state.pickedCloud) return 'Pick one of your devices above.';
   // Broadcast offers ONE file for others to pull. Silently sending only the first
   // of several is the fault this replaces; say so and point at the path that does
   // handle several.
@@ -1001,6 +1150,7 @@ function footerReason(): string {
 }
 async function onPrimary() {
   if (state.dest === 'broadcast') return startBroadcast();
+  if (state.dest === 'mydevice') return sendToCloudDevice();
   if (state.dest === 'nearby') {
     const typed = (root.querySelector<HTMLInputElement>('#net-dest')?.value || '').trim();
     const dest = typed || state.picked?.dest || '';
@@ -1052,6 +1202,41 @@ async function startBroadcast() {
     state.paths = [];
     render();
   } catch (e) {
+    toast(String(e));
+  }
+}
+
+// sendToCloudDevice sends the staged files to one of the account's own devices,
+// sealed to that device's key. It reports like a device send rather than a link
+// share: there is no URL to hand out, so the result is a confirmation, not a
+// copyable link.
+async function sendToCloudDevice(): Promise<void> {
+  const target = state.pickedCloud;
+  if (!target) return; // the footer already says to pick one; the button is disabled
+  const btn = root.querySelector<HTMLButtonElement>('#primary-btn')!;
+  btn.disabled = true;
+  try {
+    const out = await backend().Share({
+      paths: state.paths,
+      target: 'device',
+      deviceId: target.sessionId,
+      devicePub: target.publicKey,
+    });
+    const failed = out.find((o) => !o.ok);
+    if (failed) {
+      btn.disabled = false;
+      toast(failed.error || 'Send failed');
+      return;
+    }
+    const n = state.paths.length;
+    state.view = 'home';
+    state.paths = [];
+    state.pickedCloud = null;
+    await refreshActivity();
+    render();
+    toast(`Sent ${n} file${n === 1 ? '' : 's'} to ${target.name}`);
+  } catch (e) {
+    btn.disabled = false;
     toast(String(e));
   }
 }
@@ -1300,26 +1485,46 @@ function wire() {
   });
   on('#upd-close, #upd-later', 'click', () => { state.updateOpen = false; render(); });
   busyClick('#login-btn', signIn); // opens a browser and waits on the round trip
-  root.querySelector('#reopen-login')?.addEventListener('click', () => backend().BeginLogin());
-  root.querySelector('#logout-btn')?.addEventListener('click', logout);
-  root.querySelector('#apply-update')?.addEventListener('click', applyUpdate);
+  // #login-btn already reported itself; these three do the same kind of work and
+  // did not. applyUpdate downloads and installs a build, which is the longest
+  // wait in the app.
+  busyClick('#reopen-login', () => backend().BeginLogin());
+  busyClick('#logout-btn', logout);
+  busyClick('#apply-update', applyUpdate);
   root.querySelector('#open-share')?.addEventListener('click', () => { state.view = 'share'; render(); });
-  root.querySelector('#pick-files')?.addEventListener('click', (e) => { e.stopPropagation(); pickFiles(); });
+  // Opens a native dialog: the wait is entirely outside our control.
+  busyClick('#pick-files', (e) => { e.stopPropagation(); return pickFiles(); });
   root.querySelector('#canvas')?.addEventListener('click', pickFiles);
   root.querySelector('#share-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
   busyClick('#nearby-find', () => findNearby()); // a deep pass probes the whole subnet
-  root.querySelector('#open-net-settings')?.addEventListener('click', async () => {
+  busyClick('#open-net-settings', async () => {
     try { await backend().OpenNetworkSettings(); } catch (e) { toast(String(e)); }
   });
-  root.querySelector('#clip-add')?.addEventListener('click', addClipboard);
+  busyClick('#clip-add', addClipboard);
   busyClick('#primary-btn', onPrimary); // sends, or uploads a share
   root.querySelector('#bc-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
-  root.querySelectorAll('#bc-stop').forEach((b) => b.addEventListener('click', stopBroadcast));
+  busyClick('#bc-stop', stopBroadcast);
   root.querySelector('#live-row')?.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest('#bc-stop')) { state.view = 'broadcast'; render(); } });
   on('.chip-x', 'click', (e) => { state.paths.splice(Number((e.currentTarget as HTMLElement).dataset.i), 1); render(); });
   // Picking a device selects it; the send happens from the primary button. The
   // old behaviour fired the transfer straight from this row, which left no
   // moment to notice you had picked the wrong machine.
+  root.querySelectorAll<HTMLElement>('.pick-cloud').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sessionId = el.dataset.session || '';
+      state.pickedCloud =
+        state.pickedCloud?.sessionId === sessionId
+          ? null
+          : { sessionId, publicKey: el.dataset.key || '', name: el.dataset.name || sessionId };
+      render();
+    }),
+  );
+  // busyClick, not a bare listener: both of these make a network call, and the
+  // app's convention is that anything outliving BUSY_DELAY says so. busyWhile
+  // re-resolves the control by id each time, which matters here because
+  // loadCloudDevices re-renders and replaces the button mid-flight.
+  busyClick('#cloud-retry', (e) => { e.stopPropagation(); return loadCloudDevices(); });
   root.querySelectorAll<HTMLElement>('.pick-dev').forEach((el) =>
     el.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1361,7 +1566,13 @@ function wire() {
       if (state.dl && state.dl.fingerprint === p.fingerprint) { state.dl = { ...state.dl, check }; render(); }
     } catch { /* the prompt is still worth showing without a verdict */ }
   });
-  on('.dest-opt', 'click', (e) => { state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest; render(); });
+  on('.dest-opt', 'click', (e) => {
+    state.dest = (e.currentTarget as HTMLElement).dataset.destOpt as Dest;
+    render();
+    // Fetch the account's devices when that option is opened, not on startup:
+    // it is a network call, and most sends never go near it.
+    if (state.dest === 'mydevice' && !state.cloudDevices.length && !state.cloudDevicesLoading) void loadCloudDevices();
+  });
   // A div with a click handler is invisible to the keyboard. These are radios in
   // everything but markup, so they answer to Enter and Space like one.
   on('.dest-opt, .mode', 'keydown', (e) => {
@@ -1370,7 +1581,7 @@ function wire() {
     e.preventDefault();
     (e.currentTarget as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
-  on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .mode, .dest-opt .addr-row', 'click', (e) => e.stopPropagation());
+  on('.dest-opt input, .dest-opt .send-to, .dest-opt .pick-dev, .dest-opt .pick-cloud, .dest-opt .mode, .dest-opt .addr-row', 'click', (e) => e.stopPropagation());
   on('.mode', 'click', (e) => { state.bcAccess = (e.currentTarget as HTMLElement).dataset.bcMode as any; render(); });
   const rc = root.querySelector<HTMLInputElement>('#recipients');
   rc?.addEventListener('input', () => (state.recipients = rc.value));
@@ -1406,8 +1617,10 @@ function wire() {
     try { await backend().PeerRemember(p.name, p.fingerprint); } catch { /* not worth blocking the send */ }
     await sendTo(p.dest);
   });
-  root.querySelector('#req-reject')?.addEventListener('click', () => respondRequest(false));
-  root.querySelector('#req-accept')?.addEventListener('click', async () => {
+  // The sender is blocked waiting on this answer, so the button must not look
+  // like the click was missed.
+  busyClick('#req-reject', () => respondRequest(false));
+  busyClick('#req-accept', async () => {
     const r = state.requests[0];
     const wantTrust = !!(r && root.querySelector<HTMLInputElement>('#req-trust')?.checked && r.fingerprint);
     const mode = root.querySelector<HTMLSelectElement>('#req-trust-mode')?.value === 'auto' ? 'auto' : 'ask';
@@ -1430,7 +1643,7 @@ function wire() {
   // settings
   // One tap from the send flow, so the user never has to go hunting in Settings
   // for a thing they were just told they need.
-  on('#dest-make-disc', 'click', async () => {
+  busyClick('#dest-make-disc', async () => {
     try {
       await backend().SetDiscoverable(true);
       if (state.status) state.status.discoverable = true;
@@ -1481,10 +1694,12 @@ function wire() {
     }),
   );
   // The whole row, as the plan promised — not just the icon.
+  // The row does the same work as the ⤓ button inside it, which already reported
+  // itself; only the row did not.
   root.querySelectorAll<HTMLElement>('.inc-row').forEach((el) =>
-    el.addEventListener('click', () => saveIncoming(el.dataset.id || '')),
+    el.addEventListener('click', () => void busyWhile(el, saveIncoming(el.dataset.id || ''))),
   );
-  on('#remember-folder', 'click', async () => {
+  busyClick('#remember-folder', async () => {
     const dir = state.pendingRemember;
     state.pendingRemember = '';
     try { await backend().SetIncomingFolder(dir); state.incomingFolder = dir; toast('Received files will be saved there'); }
@@ -1492,13 +1707,14 @@ function wire() {
     render();
   });
   on('#remember-dismiss', 'click', () => { state.pendingRemember = ''; render(); });
-  on('#change-folder', 'click', async () => {
+  // A native folder picker: the app can sit here for as long as the user browses.
+  busyClick('#change-folder', async () => {
     try {
       const dir = await backend().ChooseIncomingFolder();
       if (dir) { state.incomingFolder = dir; toast('Received files will be saved there'); render(); }
     } catch (e) { toast(String(e)); }
   });
-  on('#clear-folder', 'click', async () => {
+  busyClick('#clear-folder', async () => {
     try { await backend().SetIncomingFolder(''); state.incomingFolder = ''; toast('You will be asked each time'); render(); }
     catch (e) { toast(String(e)); }
   });
@@ -1516,11 +1732,21 @@ function wire() {
   // to collapse this, so a strip link that could only ever open it left the user
   // stuck with Settings expanded.
   on('#open-settings', 'click', () => {
-    const d = root.querySelector<HTMLDetailsElement>('details.settings');
-    if (!d) return;
-    d.open = !d.open;
-    if (d.open) d.scrollIntoView({ block: 'nearest' });
+    state.settingsOpen = !state.settingsOpen;
+    render();
+    if (!state.settingsOpen) return;
+    root.querySelector<HTMLDetailsElement>('details.settings')?.scrollIntoView({ block: 'nearest' });
+    // Fetch the device list the first time Settings is opened, not at startup:
+    // it is a network call, and most sessions never look at it. The block
+    // reserves its height, so filling it in does not move anything.
+    if (state.status?.loggedIn && !state.cloudDevices.length && !state.cloudDevicesLoading) void loadCloudDevices();
   });
+  // Clicking the <summary> toggles natively; mirror that into state so the next
+  // render agrees with what the user sees.
+  root.querySelector<HTMLDetailsElement>('details.settings')?.addEventListener('toggle', (e) => {
+    state.settingsOpen = (e.currentTarget as HTMLDetailsElement).open;
+  });
+  busyClick('#devices-refresh', (e) => { e.stopPropagation(); return loadCloudDevices(); });
   on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
   on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
@@ -1530,16 +1756,16 @@ function wire() {
   wireToggle('set-shell', (o) => backend().SetShellIntegration(o));
   wireToggle('set-autostart', (o) => backend().SetAutostart(o));
   wireToggle('set-beta', async (o) => { await backend().SetUpdateChannel(o ? 'beta' : 'stable'); state.updateChannel = o ? 'beta' : 'stable'; state.update = null; render(); checkForUpdate(); });
-  on('.trusted-revoke', 'click', async (e) => { try { await backend().UntrustDevice((e.currentTarget as HTMLElement).dataset.fp || ''); } catch (err) { toast(String(err)); } loadTrusted(); });
+  busyClick('.trusted-revoke', async (e) => { try { await backend().UntrustDevice((e.currentTarget as HTMLElement).dataset.fp || ''); } catch (err) { toast(String(err)); } await loadTrusted(); });
   on('.trusted-mode', 'change', async (e) => {
     const el = e.currentTarget as HTMLSelectElement; const fp = el.dataset.fp || '';
     if (el.value === 'auto') { const d = state.trusted.find((t) => t.fingerprint === fp); startTrust(fp, d?.name || '', 'auto'); loadTrusted(); return; } // widening: needs the code
     try { await backend().SetTrustMode(fp, 'ask'); } catch (err) { toast(String(err)); } loadTrusted();
   });
   root.querySelector('#trust-cancel')?.addEventListener('click', () => { state.trustPrompt = null; render(); });
-  root.querySelector('#trust-verify')?.addEventListener('click', submitTrustCode);
+  busyClick('#trust-verify', submitTrustCode);
   root.querySelector('#trust-code')?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') submitTrustCode(); });
-  root.querySelector('#clear-activity')?.addEventListener('click', async () => { try { await backend().ClearActivity(); } catch { /* */ } state.activity = []; render(); });
+  busyClick('#clear-activity', async () => { try { await backend().ClearActivity(); } catch { /* */ } state.activity = []; render(); });
 }
 
 function wireToggle(id: string, fn: (on: boolean) => Promise<void>) {
