@@ -199,3 +199,22 @@ describe('Settings survives a re-render', () => {
     expect((m.$('details.settings') as HTMLDetailsElement).open).toBe(true);
   });
 });
+
+// Anything that outlives BUSY_DELAY has to say so -- that is the app's
+// convention, and a Refresh button that makes a network call and shows nothing
+// looks broken rather than busy.
+describe('the device controls report that they are working', () => {
+  it('marks Refresh busy while the list loads, and clears it after', async () => {
+    let release: (v: unknown) => void = () => {};
+    const held = new Promise((r) => { release = r; });
+    const m = await mount({ ListDevices: async () => { await held; return [laptop]; } });
+    await click(m, '#open-settings');
+    await click(m, '#devices-refresh');
+    await m.settle(180); // past BUSY_DELAY (120ms)
+
+    expect(m.$('#devices-refresh')?.classList.contains('is-busy')).toBe(true);
+    release([laptop]);
+    await m.settle(30);
+    expect(m.$('#devices-refresh')?.classList.contains('is-busy')).toBe(false);
+  });
+});

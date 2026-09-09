@@ -1516,7 +1516,11 @@ function wire() {
       render();
     }),
   );
-  root.querySelector('#cloud-retry')?.addEventListener('click', (e) => { e.stopPropagation(); void loadCloudDevices(); });
+  // busyClick, not a bare listener: both of these make a network call, and the
+  // app's convention is that anything outliving BUSY_DELAY says so. busyWhile
+  // re-resolves the control by id each time, which matters here because
+  // loadCloudDevices re-renders and replaces the button mid-flight.
+  busyClick('#cloud-retry', (e) => { e.stopPropagation(); return loadCloudDevices(); });
   root.querySelectorAll<HTMLElement>('.pick-dev').forEach((el) =>
     el.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1733,7 +1737,7 @@ function wire() {
   root.querySelector<HTMLDetailsElement>('details.settings')?.addEventListener('toggle', (e) => {
     state.settingsOpen = (e.currentTarget as HTMLDetailsElement).open;
   });
-  on('#devices-refresh', 'click', (e) => { e.stopPropagation(); void loadCloudDevices(); });
+  busyClick('#devices-refresh', (e) => { e.stopPropagation(); return loadCloudDevices(); });
   on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
   on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
