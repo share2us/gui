@@ -218,3 +218,35 @@ describe('the device controls report that they are working', () => {
     expect(m.$('#devices-refresh')?.classList.contains('is-busy')).toBe(false);
   });
 });
+
+// A sweep of the whole frontend (not just the new code) for buttons that await a
+// backend call through a bare listener. These two are representative: one in a
+// modal where the sender is blocked waiting, one that opens a native dialog.
+describe('async buttons across the app report that they are working', () => {
+  it('marks Clear activity busy while the backend call runs', async () => {
+    let release: (v: unknown) => void = () => {};
+    const held = new Promise((r) => { release = r; });
+    const m = await mount({
+      ActivityLog: async () => [{ kind: 'link', peer: 'public link', name: 'a.txt', size: 1, ts: Date.now() }],
+      ClearActivity: async () => { await held; },
+    });
+    await click(m, '#open-settings');
+    await click(m, '#clear-activity');
+    await m.settle(180);
+
+    expect(m.$('#clear-activity')?.classList.contains('is-busy')).toBe(true);
+    release(undefined);
+    await m.settle(30);
+    expect(m.$('#clear-activity')?.classList.contains('is-busy')).toBe(false);
+  });
+
+  // Nothing should flash for work that finishes immediately -- that is what the
+  // 120ms delay is for, and it is easy to lose when converting a handler.
+  it('does not flash the busy state on work that finishes at once', async () => {
+    const m = await mount({ ListDevices: async () => [laptop] });
+    await click(m, '#open-settings');
+    await click(m, '#devices-refresh');
+    await m.settle(10); // well inside BUSY_DELAY
+    expect(m.$('#devices-refresh')?.classList.contains('is-busy')).toBe(false);
+  });
+});

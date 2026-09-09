@@ -1485,21 +1485,25 @@ function wire() {
   });
   on('#upd-close, #upd-later', 'click', () => { state.updateOpen = false; render(); });
   busyClick('#login-btn', signIn); // opens a browser and waits on the round trip
-  root.querySelector('#reopen-login')?.addEventListener('click', () => backend().BeginLogin());
-  root.querySelector('#logout-btn')?.addEventListener('click', logout);
-  root.querySelector('#apply-update')?.addEventListener('click', applyUpdate);
+  // #login-btn already reported itself; these three do the same kind of work and
+  // did not. applyUpdate downloads and installs a build, which is the longest
+  // wait in the app.
+  busyClick('#reopen-login', () => backend().BeginLogin());
+  busyClick('#logout-btn', logout);
+  busyClick('#apply-update', applyUpdate);
   root.querySelector('#open-share')?.addEventListener('click', () => { state.view = 'share'; render(); });
-  root.querySelector('#pick-files')?.addEventListener('click', (e) => { e.stopPropagation(); pickFiles(); });
+  // Opens a native dialog: the wait is entirely outside our control.
+  busyClick('#pick-files', (e) => { e.stopPropagation(); return pickFiles(); });
   root.querySelector('#canvas')?.addEventListener('click', pickFiles);
   root.querySelector('#share-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
   busyClick('#nearby-find', () => findNearby()); // a deep pass probes the whole subnet
-  root.querySelector('#open-net-settings')?.addEventListener('click', async () => {
+  busyClick('#open-net-settings', async () => {
     try { await backend().OpenNetworkSettings(); } catch (e) { toast(String(e)); }
   });
-  root.querySelector('#clip-add')?.addEventListener('click', addClipboard);
+  busyClick('#clip-add', addClipboard);
   busyClick('#primary-btn', onPrimary); // sends, or uploads a share
   root.querySelector('#bc-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
-  root.querySelectorAll('#bc-stop').forEach((b) => b.addEventListener('click', stopBroadcast));
+  busyClick('#bc-stop', stopBroadcast);
   root.querySelector('#live-row')?.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest('#bc-stop')) { state.view = 'broadcast'; render(); } });
   on('.chip-x', 'click', (e) => { state.paths.splice(Number((e.currentTarget as HTMLElement).dataset.i), 1); render(); });
   // Picking a device selects it; the send happens from the primary button. The
@@ -1613,8 +1617,10 @@ function wire() {
     try { await backend().PeerRemember(p.name, p.fingerprint); } catch { /* not worth blocking the send */ }
     await sendTo(p.dest);
   });
-  root.querySelector('#req-reject')?.addEventListener('click', () => respondRequest(false));
-  root.querySelector('#req-accept')?.addEventListener('click', async () => {
+  // The sender is blocked waiting on this answer, so the button must not look
+  // like the click was missed.
+  busyClick('#req-reject', () => respondRequest(false));
+  busyClick('#req-accept', async () => {
     const r = state.requests[0];
     const wantTrust = !!(r && root.querySelector<HTMLInputElement>('#req-trust')?.checked && r.fingerprint);
     const mode = root.querySelector<HTMLSelectElement>('#req-trust-mode')?.value === 'auto' ? 'auto' : 'ask';
@@ -1637,7 +1643,7 @@ function wire() {
   // settings
   // One tap from the send flow, so the user never has to go hunting in Settings
   // for a thing they were just told they need.
-  on('#dest-make-disc', 'click', async () => {
+  busyClick('#dest-make-disc', async () => {
     try {
       await backend().SetDiscoverable(true);
       if (state.status) state.status.discoverable = true;
@@ -1688,10 +1694,12 @@ function wire() {
     }),
   );
   // The whole row, as the plan promised — not just the icon.
+  // The row does the same work as the ⤓ button inside it, which already reported
+  // itself; only the row did not.
   root.querySelectorAll<HTMLElement>('.inc-row').forEach((el) =>
-    el.addEventListener('click', () => saveIncoming(el.dataset.id || '')),
+    el.addEventListener('click', () => void busyWhile(el, saveIncoming(el.dataset.id || ''))),
   );
-  on('#remember-folder', 'click', async () => {
+  busyClick('#remember-folder', async () => {
     const dir = state.pendingRemember;
     state.pendingRemember = '';
     try { await backend().SetIncomingFolder(dir); state.incomingFolder = dir; toast('Received files will be saved there'); }
@@ -1699,13 +1707,14 @@ function wire() {
     render();
   });
   on('#remember-dismiss', 'click', () => { state.pendingRemember = ''; render(); });
-  on('#change-folder', 'click', async () => {
+  // A native folder picker: the app can sit here for as long as the user browses.
+  busyClick('#change-folder', async () => {
     try {
       const dir = await backend().ChooseIncomingFolder();
       if (dir) { state.incomingFolder = dir; toast('Received files will be saved there'); render(); }
     } catch (e) { toast(String(e)); }
   });
-  on('#clear-folder', 'click', async () => {
+  busyClick('#clear-folder', async () => {
     try { await backend().SetIncomingFolder(''); state.incomingFolder = ''; toast('You will be asked each time'); render(); }
     catch (e) { toast(String(e)); }
   });
@@ -1747,16 +1756,16 @@ function wire() {
   wireToggle('set-shell', (o) => backend().SetShellIntegration(o));
   wireToggle('set-autostart', (o) => backend().SetAutostart(o));
   wireToggle('set-beta', async (o) => { await backend().SetUpdateChannel(o ? 'beta' : 'stable'); state.updateChannel = o ? 'beta' : 'stable'; state.update = null; render(); checkForUpdate(); });
-  on('.trusted-revoke', 'click', async (e) => { try { await backend().UntrustDevice((e.currentTarget as HTMLElement).dataset.fp || ''); } catch (err) { toast(String(err)); } loadTrusted(); });
+  busyClick('.trusted-revoke', async (e) => { try { await backend().UntrustDevice((e.currentTarget as HTMLElement).dataset.fp || ''); } catch (err) { toast(String(err)); } await loadTrusted(); });
   on('.trusted-mode', 'change', async (e) => {
     const el = e.currentTarget as HTMLSelectElement; const fp = el.dataset.fp || '';
     if (el.value === 'auto') { const d = state.trusted.find((t) => t.fingerprint === fp); startTrust(fp, d?.name || '', 'auto'); loadTrusted(); return; } // widening: needs the code
     try { await backend().SetTrustMode(fp, 'ask'); } catch (err) { toast(String(err)); } loadTrusted();
   });
   root.querySelector('#trust-cancel')?.addEventListener('click', () => { state.trustPrompt = null; render(); });
-  root.querySelector('#trust-verify')?.addEventListener('click', submitTrustCode);
+  busyClick('#trust-verify', submitTrustCode);
   root.querySelector('#trust-code')?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') submitTrustCode(); });
-  root.querySelector('#clear-activity')?.addEventListener('click', async () => { try { await backend().ClearActivity(); } catch { /* */ } state.activity = []; render(); });
+  busyClick('#clear-activity', async () => { try { await backend().ClearActivity(); } catch { /* */ } state.activity = []; render(); });
 }
 
 function wireToggle(id: string, fn: (on: boolean) => Promise<void>) {
