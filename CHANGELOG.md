@@ -95,6 +95,26 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   6-digit code beside a device in the list and the code in that same device's
   transfer prompt were two different numbers.
 
+### Security
+- **The app now acts only on files you actually chose.** Sharing, sending over
+  the network, broadcasting and picking a receive folder each took whatever path
+  they were handed. Nothing could reach them today — the pages are the app's own
+  and external links open in your browser — but if anything ever did, a single
+  call would have been enough to upload a file you never picked. A path is now
+  usable only when it came from the file picker, a drag onto the window, the
+  folder picker, or the "Share" menu in Explorer.
+- **Peer names from the network can no longer write into the app's own text.** A
+  device chooses its display name, and that name was shown untouched. It is now
+  stripped of anything that can reorder or hide what you are reading.
+- **Trusted devices are verified against keys built into the app**, and against
+  the account you are signed in to. The list used to be checked with a key kept
+  in the same file, so anything able to write that file could add itself as a
+  trusted device and have its files saved without asking.
+- **Files kept for an in-flight transfer are cleared when you sign out**, and
+  removed from disk when they expire rather than merely ignored.
+- Dependency advisories: `x/net` v0.56.0 (a panic a remote peer could trigger)
+  and `x/text` v0.39.0.
+
 ## [20260908111040] - 2026-09-08
 
 ### Changed
