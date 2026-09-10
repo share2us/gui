@@ -395,9 +395,44 @@ jobs:
             echo "::notice::[Unreleased] is empty - nothing user-facing to ship, so no release was cut for ${GITHUB_SHA}."
             exit 0
           fi
+          # Put the download FIRST, as a direct link to the installer.
+          #
+          # Someone who is not a developer lands here, sees a wall of changelog,
+          # and has to scroll past it to a collapsed "Assets" list holding a
+          # dozen files with names like share2us-gui_windows_amd64.zip to work
+          # out which one is theirs. That is a download page that requires you to
+          # already know the answer. One bold line at the top, pointing at the
+          # exact file, removes the whole problem.
+          #
+          # Built from the staged asset rather than assumed, so a release whose
+          # installer job did not produce one cannot publish a link to a 404.
+          SETUP_ASSET=$(find staging -type f -name 'Share2Us-Setup-*.exe' | head -1)
+          if [ -n "$SETUP_ASSET" ]; then
+            SETUP_NAME=$(basename "$SETUP_ASSET")
+            SETUP_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/${SETUP_NAME}"
+            {
+              echo "## ⬇ Download"
+              echo ""
+              echo "### **[Download for Windows — 64-bit installer](${SETUP_URL})**"
+              echo ""
+              echo "Run it and you are done. Windows on ARM, macOS and Linux builds are under **Assets** at the bottom of this page."
+              echo ""
+              echo "---"
+              echo ""
+              cat "$NOTES_FILE"
+            } > "${NOTES_FILE}.new"
+            mv "${NOTES_FILE}.new" "$NOTES_FILE"
+          else
+            echo "::warning::no Share2Us-Setup-*.exe among the staged assets - the release notes will have no download link."
+          fi
+
           {
             echo ""
-            echo "Windows: the **Share2Us-Setup** installer, or \`irm https://raw.githubusercontent.com/share2us/gui/main/scripts/install.ps1 | iex\`"
+            echo "---"
+            echo ""
+            echo "Install from a terminal instead:"
+            echo ""
+            echo "Windows: \`irm https://raw.githubusercontent.com/share2us/gui/main/scripts/install.ps1 | iex\`"
             echo "Linux: \`curl -fsSL https://raw.githubusercontent.com/share2us/gui/main/scripts/install.sh | sh\`"
             echo "macOS: unzip the .app (unsigned — right-click → Open the first time)."
           } >> "$NOTES_FILE"
