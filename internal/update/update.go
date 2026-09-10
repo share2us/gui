@@ -26,9 +26,19 @@ import (
 const (
 	// stable: GitHub's "latest" release, which is never a pre-release.
 	defaultReleasesURL = "https://api.github.com/repos/share2us/gui/releases/latest"
-	// beta: the full list (pre-releases included), newest picked by tag.
-	defaultReleaseListURL = "https://api.github.com/repos/share2us/gui/releases?per_page=30"
+	// beta: the newest few releases (pre-releases included), newest picked by
+	// tag. Deliberately a SHORT page. GitHub returns the full asset list for
+	// every release, so a page of 30 came to 1.2 MB and overran the read cap
+	// below -- every beta check failed with "unexpected EOF" and the channel
+	// silently offered nothing. Five is more than enough to find the newest.
+	defaultReleaseListURL = "https://api.github.com/repos/share2us/gui/releases?per_page=5"
 )
+
+// maxCheckBody caps what an update check will read. It has to clear a realistic
+// release-list page with room to spare: at ~40 KB of JSON per release, a page of
+// five is ~200 KB. The old 1 MiB cap was below a real page and broke the beta
+// channel outright, so the margin here is the point.
+const maxCheckBody = 8 << 20
 
 type ghAsset struct {
 	Name string `json:"name"`
@@ -134,7 +144,7 @@ func getJSON(ctx context.Context, client *http.Client, url string, out any) erro
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("update check: HTTP %d", resp.StatusCode)
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxCheckBody)).Decode(out)
 }
 
 func infoFrom(rel ghRelease, current, goos, goarch string) Info {
