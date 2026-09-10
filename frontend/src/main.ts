@@ -1928,7 +1928,13 @@ function ago(ts: number): string {
 }
 function copy(text: string) { const rt = (window as any).runtime; if (rt?.ClipboardSetText) rt.ClipboardSetText(text); else navigator.clipboard?.writeText(text).catch(() => {}); }
 function basename(p: string): string { const parts = p.split(/[\\/]/); return parts[parts.length - 1] || p; }
-function escapeHtml(s: string): string { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
+// Coerces rather than trusting the type. Everything rendered here arrives from
+// the Go side, and a field that is missing or renamed there is `undefined` at
+// runtime whatever the TypeScript says. Calling .replace on it throws, the throw
+// escapes render(), and because render() paints the whole view, the app freezes
+// on whatever was last drawn — one wrong field name took the entire window down.
+// A blank cell is a bad row; a blank cell is not a hung application.
+function escapeHtml(s: string): string { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 function blobToBase64(blob: Blob): Promise<string> { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => { const s = String(r.result); res(s.slice(s.indexOf(',') + 1)); }; r.onerror = () => rej(new Error('read failed')); r.readAsDataURL(blob); }); }
 function utf8ToBase64(s: string): string { return btoa(unescape(encodeURIComponent(s))); }
 function extFromMime(mime: string): string { return ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp' } as Record<string, string>)[mime] || 'png'; }

@@ -13,6 +13,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- **"My device, anywhere" no longer hangs on "Looking for your devices…".** The
+  app asked the server for your devices, got them back, and then froze while
+  drawing the list, so the window stopped responding to anything. The list is
+  drawn correctly now, and a field the app does not recognise can no longer take
+  the whole window down with it.
+
 ## [20260910074525] - 2026-09-10
 
 ### Security
