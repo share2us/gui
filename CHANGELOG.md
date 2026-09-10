@@ -38,6 +38,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   could reach it later.
 
 ### Fixed
+- **"Get beta builds" never found a build.** The check asked GitHub for the last
+  thirty releases and refused to read a reply that large, so every beta check
+  ended in an error the app reported as "you are up to date". Anyone who opted in
+  has been sitting on whatever build they installed by hand. It now asks for the
+  newest few and reads the whole reply.
 - **Buttons that are waiting on something now say so.** Several — installing an
   update, signing out, choosing a folder, answering an incoming transfer — sat
   there looking unclicked while they worked. They now show the same working
