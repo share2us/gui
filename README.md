@@ -1,174 +1,86 @@
-# Share2Us GUI
+<div align="center">
 
-A cross-platform desktop app that adds Share2Us to the file manager's right-click
-menu (7-Zip style): **right-click a file/folder → `s2u` → `Share`**, then a modal
-picks a destination — a public/private link, or a direct end-to-end-encrypted send
-to one of your devices or a contact that lands in their Downloads folder.
+# Share2Us for the desktop
 
-This is a **GUI front-end only**. It does **not** modify or replace the `s2u`
-command-line tool (`share2us/cli`); it reuses the same backend API and the
-`share2us/cli-core` library, so behaviour stays identical to the CLI.
+**Send a file to another machine. Right-click it, pick where it goes, done.**
 
-Built with [Wails v2](https://wails.io): a Go backend + a WebView UI that is native
-on each OS (WebView2 on Windows, WKWebView on macOS, WebKit2GTK on Linux). The app
-window and the whole share pipeline are portable; only the file-manager
-right-click integration is per-OS.
+[**⬇ Download**](https://github.com/share2us/gui/releases) · [Documentation](https://docs.share2.us/desktop/install/) · [share2.us](https://share2.us)
 
-## Platform support
+</div>
 
-| Platform | App window | Right-click "Share" integration |
-|---|---|---|
-| **Windows** | ✅ | ✅ registry cascading verb (Win10 + Win11) |
-| **Linux** | ✅ | ✅ KDE/Dolphin ServiceMenu + Nemo action + universal "Open With"; Nautilus native pending |
-| **macOS** | ✅ | ⏸ deferred — needs a signed Finder extension (Apple Developer ID) |
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/home.png" alt="The main window: nearby devices, files waiting to be saved, and recent activity"></td>
+<td width="33%"><img src="docs/screenshots/send.png" alt="Sending a file straight to a device on the same network"></td>
+<td width="33%"><img src="docs/screenshots/link.png" alt="Creating a link, with the choice of anyone, named people, or only you"></td>
+</tr>
+<tr>
+<td align="center"><b>See who is nearby</b><br>and what has arrived</td>
+<td align="center"><b>Send to a device</b><br>straight across your network</td>
+<td align="center"><b>Or make a link</b><br>for anyone, or for no one</td>
+</tr>
+</table>
 
-The window works everywhere today (drag a file onto it, or "Open with…"); the
-file-manager entry lands per-OS and degrades gracefully when absent.
+## What it does
 
-## Setup
+**Sends a file to another machine on your network.** Nothing is uploaded. The two
+machines talk to each other directly, so a large file moves at the speed of your
+network rather than your internet connection, and it works with no account and no
+internet at all.
 
-The setup scripts always download the **latest release build for your OS/arch**,
-verify its checksum, install it, and register the right-click integration.
+**Sends a file to your own machines, or to someone else, from anywhere.**
+Encrypted on your machine before it leaves. The server passes along something it
+cannot read.
 
-**Windows** — either download **`Share2Us-Setup-<version>.exe`** from the
-[latest release](https://github.com/share2us/gui/releases/latest) and run it (a
-normal installer: choose the app, the `s2u` CLI, or both), or use the one-liner
-(PowerShell):
+**Makes a link.** For anyone who has it, for named people who have to prove who
+they are, or for nobody but you.
 
-```powershell
-irm https://raw.githubusercontent.com/share2us/gui/main/scripts/install.ps1 | iex
-```
+Files sent to you wait until you say where they go. They do not appear in
+Downloads on their own.
 
-**Linux**:
+## Install
+
+**Windows.** Open the [releases page](https://github.com/share2us/gui/releases).
+The newest release is at the top and starts with a direct link to the installer.
+Run it and you are done.
+
+**Linux.**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/share2us/gui/main/scripts/install.sh | sh
 ```
 
-That's it — then right-click a file/folder → `s2u` → `Share` (on Windows 11, under
-"Show more options"), and sign in from the app the first time.
+Then right-click any file and look for **s2u ▸ Share**. On Windows 11 it is under
+"Show more options". Sign in from the app the first time, or skip signing in and
+use it on your own network.
 
-Re-running the setup upgrades to the newest release. Overrides via env vars:
-`SHARE2US_GUI_VERSION` (default `latest`), `SHARE2US_GUI_INSTALL_DIR`. The scripts
-live in [`scripts/`](scripts/) and pull binaries from GitHub Releases.
+| | App window | Right-click menu |
+| --- | --- | --- |
+| Windows | Yes | Yes |
+| Linux | Yes | KDE and Nemo, plus "Open With" everywhere |
+| macOS | Yes | Not yet |
 
-> Releases are built by CI for every push to `main` (`.github/workflows/release.yml`)
-> and published to GitHub Releases as `share2us-gui_<os>_<arch>.{zip,tar.gz}` with
-> `.crc32`/`.sha256` sidecars — the same version model as the CLI (a UTC-timestamp
-> `buildVersion`). `share2us-gui --version` prints the installed build.
+Re-running the installer updates it, and the app offers an update when one exists.
 
-## Architecture
+## Everything else
 
-```
-main.go            Verbs: `share <path>`, `--install-shell`, `--uninstall-shell`; opens the window
-app.go             Wails-bound methods the modal calls (Status, PendingPaths, ListDevices, Share, InstallShell)
-internal/core/     Platform-independent heart — wraps cli-core. Builds & unit-tests on any OS.
-  client.go          Load() the saved login (same store as the CLI)
-  share.go           ShareLink (public/private) + SendToDevice + SendToContact (sealed-box E2E)
-  prepare.go         folder-zip, content-type, sha256, stream-encrypt helpers (ported from the CLI)
-  device.go          own-device list → "<name>:<os>" picker
-  receive.go         inbox poll → decrypt → save to a destination dir (Downloads)
-internal/shell/    File-manager integration behind one interface (Install/Uninstall/Installed):
-  shell_windows.go   registry cascading verb
-  shell_linux.go     KDE ServiceMenu + Nemo action + "Open With" .desktop (XDG, no admin)
-  shell_other.go     no-op fallback (macOS until its integration lands)
-frontend/          Vanilla-TS + Vite modal (dark theme), portable across all three OSes
-```
+**[docs.share2.us](https://docs.share2.us)** has the rest: what each option does,
+how encryption works, devices and trust, transferring over your own network, and
+the command line.
 
-Why no `gui-core`: `cli-core` already **is** the shared client SDK (API, auth,
-crypto, lanshare, device identity), reused directly here. The thin orchestration
-in `internal/core` is GUI-local; if the CLI and GUI ever need identical high-level
-flows, promote it up into `cli-core` rather than forking a second core.
+This is the desktop app. There is also a [command-line
+client](https://github.com/share2us/cli) that does the same things, and the two
+share a library so they behave identically.
 
-The share pipeline mirrors the CLI's `upload()`: create → PUT → complete, with a
-fresh AES data key stream-encrypted and sealed per target device (libsodium
-sealed-box) for device/contact sends. The **trust model is the existing
-backend's**: a contact send only lands if the recipient trusts the sender and has
-exposed a device to them.
+## Building it yourself
 
-## Status
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the architecture, the build, and how to
+develop against a local `cli-core`.
 
-Implemented and verified (Linux build + Windows cross-compile + unit tests):
+## Licence
 
-- [x] Project scaffold, wired to `cli-core`
-- [x] Windows file-manager integration (registry verb, Win10 + Win11), install/uninstall
-- [x] Core share orchestration: public link, private (recipient) link
-- [x] Send to own device / to a contact (sealed-box E2E)
-- [x] Background receiver: `--receive` polls inbox → decrypt → Downloads, with native toasts (beeep)
-- [x] Autostart at login (Windows Run key / Linux XDG autostart) + settings toggles in the modal
-- [x] Share modal UI (public / private / device; network tab stubbed)
-- [x] In-app sign-in (device-code flow: opens the browser, polls, registers the device key)
-- [x] Trust screen: control which of your devices a contact may send to (per-sender device exposure, cli-core v0.5.0)
-
-- [x] Linux file-manager integration: KDE/Dolphin ServiceMenu + Nemo action + "Open With" (XDG, no admin)
-- [x] Windows installer (Inno Setup) with GUI / CLI / both component choice + shared login (`installer/`)
-- [x] Graphical tray icon around the receiver loop (`internal/tray/`)
-- [x] "Send to network" — LAN transfer via `cli-core/lanshare` (`internal/lan/`)
-- [x] LAN broadcast: offer a file for nearby devices to pull, with mutual identity verification
-- [x] Approval prompts for inbound LAN sends and downloads (`approve` access mode)
-- [x] Home activity feed (`lanid.ActivityAppend`)
-
-Verified against the code on 2026-09-07 — the seven items above were previously
-listed as "not yet done" long after they shipped.
-
-Not yet done (see the plan for phasing):
-
-- [ ] Nautilus (GNOME) native right-click submenu (needs a python3-nautilus extension)
-- [ ] macOS Finder integration (deferred — needs code-signing)
-- [ ] Linux packaging (`.deb` / AppImage) with the same GUI/CLI/both choice
-- [ ] Contact device-exposure trust UI + the backend `contact_sender_devices` addition
-- [ ] Recents, add-device/contact management, code-signing
-- [ ] Exact `<name>:<os>` label (needs an `OS` field on `cli-core` `DeviceSession`)
-- [ ] Two-machine verification of broadcast/resume on real hardware (loopback only so far)
-
-## Building
-
-Requires Go 1.25+, Node, and the Wails CLI
-(`go install github.com/wailsapp/wails/v2/cmd/wails@latest`).
-
-```sh
-wails build            # native build for the current OS → build/bin/share2us-gui[.exe]
-```
-
-Linux additionally needs `libgtk-3-dev` and `libwebkit2gtk-4.0-dev`. The frontend
-calls the Go backend via Wails' injected `window.go.main.App`, so `wails build`
-regenerates bindings automatically.
-
-### Cross-compiling a check from Linux/CI
-
-The Windows target is CGO-free, so it cross-compiles without a Windows box (this
-does not bundle the WebView2 installer — use `wails build` on Windows for a
-release):
-
-```sh
-cd frontend && npm ci && npm run build && cd ..
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build .
-```
-
-### Local development against a sibling `cli-core`
-
-`go.work` (git-ignored) points at `../share2us-cli-core` so you can build against
-a local checkout. Released builds use the pinned `github.com/share2us/cli-core`
-in `go.mod`.
-
-## Registering the right-click menu (Windows)
-
-```powershell
-share2us-gui.exe --install-shell     # adds  s2u ▸ Share  for files and folders (HKCU, no admin)
-share2us-gui.exe --uninstall-shell
-```
-
-## License
-
-[GNU General Public License v3.0 only](LICENSE) © 2026 Hassan Khurram
-
-The Share2Us desktop app is free software: you may use, study, share and modify
-it. If you distribute it — modified or not — you must pass on the same freedoms
-and make the corresponding source available under the GPL. Building your own
-copy for your own use carries no obligation.
-
-This repository previously carried **no licence file at all**, which meant
-default copyright ("all rights reserved") despite being public. That was an
-oversight, not an intent; the GPL now applies. Dependency licences are listed in
+[GNU General Public License v3.0 only](LICENSE) © 2026 Hassan Khurram. Use it,
+study it, share it, change it. If you pass it on, pass on the same freedoms and
+make your source available. Building your own copy for yourself carries no
+obligation. Dependency licences are in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-
