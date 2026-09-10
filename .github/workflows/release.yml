@@ -422,11 +422,20 @@ jobs:
           # already have. A step that must be remembered after every release, in
           # the middle of shipping, is a step that will be skipped.
           #
-          # Only for a stable release from a push: a beta's notes are generated,
-          # and a hand-run release should not rewrite the file under the operator.
-          # CHANGELOG.md is not a release trigger path, so this commit cannot
-          # start another run.
-          if [ "${{ inputs.channel || 'stable' }}" = stable ] && [ "${{ github.event_name }}" = push ]; then
+          # For a stable release from EITHER trigger. This used to be push-only,
+          # on the reasoning that a hand-run release should not rewrite the file
+          # under the operator - which reads well and was wrong. What decides
+          # whether the notes have shipped is the CHANNEL, not the button: a
+          # dispatched stable publishes [Unreleased] to every user just as a merge
+          # does, so leaving the file untouched queues those notes to ship a
+          # second time. The cli's 20260910063046 did exactly that. A beta is
+          # exempt because its notes are generated and it reaches nobody who did
+          # not opt in.
+          #
+          # Guarded on the default branch, so a dispatch aimed at some other ref
+          # warns rather than committing to it. CHANGELOG.md is not a release
+          # trigger path, so this commit cannot start another run.
+          if [ "${{ inputs.channel || 'stable' }}" = stable ] && [ "${GITHUB_REF_NAME}" = "${{ github.event.repository.default_branch }}" ]; then
             python3 - "$VERSION" <<'ROLL'
           import datetime, re, sys
           version = sys.argv[1]
@@ -457,4 +466,6 @@ jobs:
               git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
               git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::could not push the changelog roll; do it by hand"
             fi
+          elif [ "${{ inputs.channel || 'stable' }}" = stable ]; then
+            echo "::warning::stable release cut from ${GITHUB_REF_NAME}, not ${{ github.event.repository.default_branch }} - [Unreleased] was NOT rolled. Roll it by hand or the next release republishes these notes."
           fi
