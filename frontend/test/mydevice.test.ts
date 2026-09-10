@@ -250,3 +250,27 @@ describe('async buttons across the app report that they are working', () => {
     expect(m.$('#devices-refresh')?.classList.contains('is-busy')).toBe(false);
   });
 });
+
+// The device list hung on "Looking for your devices…" because Go sent PascalCase
+// keys (no json tags on core.Device) while this file reads camelCase. Every field
+// was undefined, escapeHtml threw on the first one, the throw escaped render(),
+// and the window froze on the last thing painted — the spinner.
+//
+// The Go side is fixed and pinned by TestDeviceJSONMatchesTheFrontendContract.
+// This is the other half: whatever arrives, the app must not die rendering it.
+describe('a device list that does not match the contract', () => {
+  // Deliberately the shape an untagged Go struct marshals to.
+  const rawGoShape = {
+    SessionID: 'sess-1', Name: 'laptop', Label: 'laptop:linux',
+    PublicKey: 'pk-1', HasKey: true, Current: false,
+  };
+
+  it('renders instead of freezing on the spinner', async () => {
+    const m = await deviceTab({ ListDevices: async () => [rawGoShape] });
+    await click(m, '[data-dest-opt="mydevice"]');
+    await m.settle(20);
+    // The spinner clearing is the whole assertion: it only clears if render()
+    // completed, and render() only completes if nothing threw on the way through.
+    expect(m.text()).not.toContain('Looking for your devices');
+  });
+});

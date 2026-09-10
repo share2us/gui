@@ -11,13 +11,19 @@ import (
 )
 
 // Device is one of the account's own device sessions, offered as a send target.
+// Device crosses to the frontend, so the json tags are not decoration: without
+// them Wails marshals the Go field names (SessionID, Name, ...) and the UI, which
+// reads sessionId/name/..., gets undefined for every field. That is what happened
+// -- see TestDeviceJSONMatchesTheFrontendContract, which exists to stop it
+// happening again. Every other struct on this boundary is tagged; this one was
+// the exception.
 type Device struct {
-	SessionID string // device_session_id — the send target
-	Name      string // device name (usually the hostname)
-	Label     string // "<name>:<os>" for display, e.g. "openclaw:linux"
-	PublicKey string // sealed-box target key; "" when the device has no key yet
-	HasKey    bool
-	Current   bool // true for this device
+	SessionID string `json:"sessionId"` // device_session_id — the send target
+	Name      string `json:"name"`      // device name (usually the hostname)
+	Label     string `json:"label"`     // "<name>:<os>" for display, e.g. "openclaw:linux"
+	PublicKey string `json:"publicKey"` // sealed-box target key; "" when the device has no key yet
+	HasKey    bool   `json:"hasKey"`
+	Current   bool   `json:"current"` // true for this device
 }
 
 // Devices lists the account's own devices. Only HasKey devices can receive an
