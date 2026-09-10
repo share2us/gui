@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260910065215] - 2026-09-10
+
 ### Added
 - **See your devices in Settings.** The machines signed in to your account, and
   whether each one is ready to receive a file or still needs you to sign in on
