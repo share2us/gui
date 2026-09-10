@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260910121353] - 2026-09-10
+
 ### Fixed
 - **"My device, anywhere" no longer hangs on "Looking for your devices…".** The
   app asked the server for your devices, got them back, and then froze while
