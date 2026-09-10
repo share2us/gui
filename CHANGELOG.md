@@ -13,6 +13,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Security
+- **An encrypted file now gets its own key.** Every encrypted share used its key
+  directly and told the pieces of the file apart with four random bytes. That was
+  safe only for as long as one key was never used to encrypt twice, which nothing
+  enforced and nothing showed. Two files encrypted under one key that drew the
+  same four bytes would have given away both of them. Each file now derives a key
+  of its own, so a key can encrypt as many files as it likes.
+- Files encrypted by earlier versions still open. **Files encrypted by this
+  version do not open in an earlier one**, which reports the format as
+  unsupported. Update both ends.
+
 ## [20260910065215] - 2026-09-10
 
 ### Added
