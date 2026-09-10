@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260910074525] - 2026-09-10
+
 ### Security
 - **An encrypted file now gets its own key.** Every encrypted share used its key
   directly and told the pieces of the file apart with four random bytes. That was
