@@ -13,6 +13,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+- **Signed-in browsers no longer appear among your devices.** Chrome and the like
+  were listed saying "can't receive yet, sign in with Share2Us on it", which is
+  advice nobody can follow: there is nothing to install on a browser and it can
+  never receive a file. To get a file to yourself in a browser, make a link or
+  use "Only me" and open it there.
+
 ## [20260910121353] - 2026-09-10
 
 ### Fixed

@@ -1032,6 +1032,8 @@ function accountDevicesBlock(): string {
     if (!state.cloudDevices.length) return `<div class="hint">Only this one so far. Sign in on another machine and it appears here.</div>`;
     return state.cloudDevices
       .map((d) => {
+        // Only a real machine reaches this now: browsers are filtered out on the
+        // Go side, so "sign in with Share2Us on it" is advice that works.
         const note = d.current
           ? 'this device'
           : d.hasKey
