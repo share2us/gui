@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260911120315] - 2026-09-11
+
 ### Changed
 - **Pick a device by clicking it, and pick as many as you like.** Choosing where
   a file went meant hitting a small arrow at the far right of the row, while the
