@@ -16,6 +16,7 @@ type ShareRequest = {
   recipients?: string[];
   deviceId?: string;
   devicePub?: string;
+  devices?: { sessionId: string; publicKey: string }[];
   password?: string;
   oneTime?: boolean;
   expires?: string;
@@ -181,7 +182,7 @@ const state = {
   cloudDevices: [] as CloudDevice[], // the account's own devices, for an over-the-internet send
   cloudDevicesLoading: false as boolean,
   cloudDevicesError: '' as string,
-  pickedCloud: null as { sessionId: string; publicKey: string; name: string } | null,
+  pickedCloud: [] as { sessionId: string; publicKey: string; name: string }[],
   // login
   loginPhase: 'idle' as 'idle' | 'waiting' | 'error',
   loginInfo: null as LoginInfo | null,
@@ -697,18 +698,23 @@ function cloudDeviceList(): string {
   }
   return devices
     .map((d) => {
-      const picked = state.pickedCloud?.sessionId === d.sessionId;
+      const picked = state.pickedCloud.some((p) => p.sessionId === d.sessionId);
       // A device with no encryption key cannot be sealed to. It is shown rather
       // than hidden, because "my laptop is missing" is a worse puzzle than a
       // dimmed row that says why.
       const why = d.hasKey ? '' : ' — sign in with the app on that device first';
-      return `<div class="mini-dev${picked ? ' picked' : ''}"${d.hasKey ? '' : ' style="opacity:.55"'}>
+      // The whole row is the control. A small arrow on the far right was the only
+      // way to choose a device, which is a tiny target at the end of a line whose
+      // text already looks like the thing you are meant to click.
+      return `<div class="mini-dev pick-cloud${picked ? ' picked' : ''}"
+        ${d.hasKey ? 'role="checkbox" tabindex="0"' : 'aria-disabled="true" style="opacity:.55"'}
+        aria-checked="${picked ? 'true' : 'false'}"
+        data-session="${escapeHtml(d.sessionId)}"
+        data-key="${escapeHtml(d.publicKey)}" data-name="${escapeHtml(d.name)}"
+        ${d.hasKey ? '' : 'data-nokey="1"'}
+        title="${d.hasKey ? (picked ? 'Selected — click to unselect' : 'Click to select. Pick as many as you like.') : 'This device has no encryption key yet'}">
         <span class="n"><b>${escapeHtml(d.name)}</b>${escapeHtml(why)}</span>
-        <button class="ib${picked ? ' on' : ''} pick-cloud" data-session="${escapeHtml(d.sessionId)}"
-          data-key="${escapeHtml(d.publicKey)}" data-name="${escapeHtml(d.name)}"
-          ${d.hasKey ? '' : 'disabled'}
-          title="${d.hasKey ? (picked ? 'Selected' : 'Select this device') : 'This device has no encryption key yet'}"
-          style="margin-left:4px">${picked ? '✓' : '→'}</button>
+        ${picked ? '<span class="ib on" aria-hidden="true" style="margin-left:4px">✓</span>' : ''}
       </div>`;
     })
     .join('');
@@ -1110,8 +1116,10 @@ function primaryLabel(): string {
     return n && target ? `Send ${files} to ${target}` : `Send ${files}`;
   }
   if (state.dest === 'mydevice') {
-    const target = state.pickedCloud?.name;
-    return n && target ? `Send ${files} to ${target}` : `Send ${files}`;
+    const picked = state.pickedCloud;
+    if (!n || picked.length === 0) return `Send ${files}`;
+    if (picked.length === 1) return `Send ${files} to ${picked[0].name}`;
+    return `Send ${files} to ${picked.length} devices`;
   }
   if (state.dest === 'only-me') {
     // Not "Create link": the point of this destination is that the file is
@@ -1141,7 +1149,7 @@ function footerReason(): string {
   if (isCloudLink(state.dest) && !state.status?.loggedIn) return 'Login to share to the cloud.';
   if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter its address.';
   if (state.dest === 'mydevice' && !state.status?.loggedIn) return 'Login to send to your own devices.';
-  if (state.dest === 'mydevice' && !state.pickedCloud) return 'Pick one of your devices above.';
+  if (state.dest === 'mydevice' && state.pickedCloud.length === 0) return 'Pick one or more of your devices above.';
   // Broadcast offers ONE file for others to pull. Silently sending only the first
   // of several is the fault this replaces; say so and point at the path that does
   // handle several.
@@ -1213,16 +1221,18 @@ async function startBroadcast() {
 // share: there is no URL to hand out, so the result is a confirmation, not a
 // copyable link.
 async function sendToCloudDevice(): Promise<void> {
-  const target = state.pickedCloud;
-  if (!target) return; // the footer already says to pick one; the button is disabled
+  const targets = state.pickedCloud;
+  if (targets.length === 0) return; // the footer says to pick one; the button is disabled
   const btn = root.querySelector<HTMLButtonElement>('#primary-btn')!;
   btn.disabled = true;
   try {
+    // One upload, one sealed key per device. Sending to three machines does not
+    // cost three uploads, and the server already waits for every one of them to
+    // acknowledge before it deletes the object.
     const out = await backend().Share({
       paths: state.paths,
       target: 'device',
-      deviceId: target.sessionId,
-      devicePub: target.publicKey,
+      devices: targets.map((t) => ({ sessionId: t.sessionId, publicKey: t.publicKey })),
     });
     const failed = out.find((o) => !o.ok);
     if (failed) {
@@ -1231,12 +1241,13 @@ async function sendToCloudDevice(): Promise<void> {
       return;
     }
     const n = state.paths.length;
+    const where = targets.length === 1 ? targets[0].name : `${targets.length} devices`;
     state.view = 'home';
     state.paths = [];
-    state.pickedCloud = null;
+    state.pickedCloud = [];
     await refreshActivity();
     render();
-    toast(`Sent ${n} file${n === 1 ? '' : 's'} to ${target.name}`);
+    toast(`Sent ${n} file${n === 1 ? '' : 's'} to ${where}`);
   } catch (e) {
     btn.disabled = false;
     toast(String(e));
@@ -1511,17 +1522,30 @@ function wire() {
   // Picking a device selects it; the send happens from the primary button. The
   // old behaviour fired the transfer straight from this row, which left no
   // moment to notice you had picked the wrong machine.
-  root.querySelectorAll<HTMLElement>('.pick-cloud').forEach((el) =>
+  const toggleCloud = (el: HTMLElement) => {
+    if (el.dataset.nokey) return; // a device with no key cannot be sealed to
+    const sessionId = el.dataset.session || '';
+    const already = state.pickedCloud.some((p) => p.sessionId === sessionId);
+    state.pickedCloud = already
+      ? state.pickedCloud.filter((p) => p.sessionId !== sessionId)
+      : [...state.pickedCloud, { sessionId, publicKey: el.dataset.key || '', name: el.dataset.name || sessionId }];
+    render();
+  };
+  root.querySelectorAll<HTMLElement>('.pick-cloud').forEach((el) => {
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      const sessionId = el.dataset.session || '';
-      state.pickedCloud =
-        state.pickedCloud?.sessionId === sessionId
-          ? null
-          : { sessionId, publicKey: el.dataset.key || '', name: el.dataset.name || sessionId };
-      render();
-    }),
-  );
+      toggleCloud(el);
+    });
+    // A div with a click handler is invisible to the keyboard. These behave as
+    // checkboxes, so they answer to Enter and Space like one.
+    el.addEventListener('keydown', (e) => {
+      const k = (e as KeyboardEvent).key;
+      if (k !== 'Enter' && k !== ' ') return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleCloud(el);
+    });
+  });
   // busyClick, not a bare listener: both of these make a network call, and the
   // app's convention is that anything outliving BUSY_DELAY says so. busyWhile
   // re-resolves the control by id each time, which matters here because

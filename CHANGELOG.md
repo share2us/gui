@@ -13,6 +13,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+- **Pick a device by clicking it, and pick as many as you like.** Choosing where
+  a file went meant hitting a small arrow at the far right of the row, while the
+  row itself, which is what your eye goes to, did nothing. The whole row is the
+  control now, it answers the keyboard, and you can select several machines at
+  once. Sending to three of your devices uploads the file once, not three times.
+
 ## [20260911112332] - 2026-09-11
 
 ### Changed
