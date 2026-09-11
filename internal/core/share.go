@@ -112,16 +112,28 @@ func apiVisibility(v Visibility) string {
 // device's public key (no trust step: same account). devicePublicKey must be
 // non-empty (the device has completed key registration).
 func (c *Client) SendToDevice(ctx context.Context, path, deviceSessionID, devicePublicKey string) (Result, error) {
+	return c.SendToDevices(ctx, path, []DeviceTarget{{SessionID: deviceSessionID, PublicKey: devicePublicKey}})
+}
+
+// SendToDevices sends path to SEVERAL of the account's own devices at once.
+//
+// The bytes are uploaded ONCE and the content key is sealed separately for each
+// device, which is what the upload API has always accepted (Targets) and what the
+// contact path already did. Sending to three machines therefore costs one
+// upload, not three -- the sealed keys are a few hundred bytes each.
+func (c *Client) SendToDevices(ctx context.Context, path string, targets []DeviceTarget) (Result, error) {
 	if c.IsAPIToken() {
 		return Result{}, errors.New("device sends need an interactive login, not a personal API token")
 	}
-	if devicePublicKey == "" {
-		return Result{}, errors.New("that device has no encryption key yet; sign in with the app on it first")
+	if len(targets) == 0 {
+		return Result{}, errors.New("no device selected")
 	}
-	return c.sealedSend(ctx, path, sealedSendOpts{
-		targetDevice:    deviceSessionID,
-		targetPublicKey: devicePublicKey,
-	})
+	for _, t := range targets {
+		if t.PublicKey == "" {
+			return Result{}, errors.New("that device has no encryption key yet; sign in with the app on it first")
+		}
+	}
+	return c.sealedSend(ctx, path, sealedSendOpts{ownDevices: targets})
 }
 
 // SendToContact sends path to another account addressed by email. It only
@@ -152,11 +164,16 @@ func (c *Client) SendToContact(ctx context.Context, path, email string) (Result,
 
 // sealedSendOpts selects the sealed-box target: either a single own-device, or a
 // contact's fanned-out device list.
+// DeviceTarget is one of the account's own devices to seal a send to.
+type DeviceTarget struct {
+	SessionID string `json:"sessionId"`
+	PublicKey string `json:"publicKey"`
+}
+
 type sealedSendOpts struct {
-	targetDevice    string
-	targetPublicKey string
-	recipientEmail  string
-	contactDevices  []clicore.TeammateDevice
+	ownDevices     []DeviceTarget
+	recipientEmail string
+	contactDevices []clicore.TeammateDevice
 }
 
 // sealedSend performs the shared encrypt-then-seal upload for device/contact
@@ -202,13 +219,29 @@ func (c *Client) sealedSend(ctx context.Context, path string, opts sealedSendOpt
 		EncryptionAlgo: clicore.EncryptionAlgoAES256GCM + "+sealedbox",
 	}
 	switch {
-	case opts.targetDevice != "":
-		sealed, err := clicore.SealContentKeyForDevice(dataKey, opts.targetPublicKey)
+	case len(opts.ownDevices) == 1:
+		// One target keeps the singular fields, which is the shape every server
+		// and client on the current release already speaks.
+		sealed, err := clicore.SealContentKeyForDevice(dataKey, opts.ownDevices[0].PublicKey)
 		if err != nil {
 			return Result{}, err
 		}
-		req.TargetDevice = opts.targetDevice
+		req.TargetDevice = opts.ownDevices[0].SessionID
 		req.SealedKey = sealed
+	case len(opts.ownDevices) > 1:
+		// Several: one upload, one sealed key each. Identical in shape to the
+		// contact fan-out below, and the server already waits for EVERY target to
+		// acknowledge before it deletes the object (delete-once-received).
+		for _, t := range opts.ownDevices {
+			sealed, err := clicore.SealContentKeyForDevice(dataKey, t.PublicKey)
+			if err != nil {
+				return Result{}, err
+			}
+			req.Targets = append(req.Targets, clicore.UploadTarget{
+				TargetDeviceSessionID: t.SessionID,
+				SealedKey:             sealed,
+			})
+		}
 	default:
 		req.RecipientEmail = opts.recipientEmail
 		for _, d := range opts.contactDevices {

@@ -315,18 +315,21 @@ func (a *App) ListDevices() ([]core.Device, error) {
 // ShareRequest is the modal's submit payload. Target selects the destination:
 // "public" | "private" | "only-me" | "device" | "contact".
 type ShareRequest struct {
-	Paths        []string `json:"paths"`
-	Target       string   `json:"target"`
-	Recipients   []string `json:"recipients"`
-	Email        string   `json:"email"`
-	DeviceID     string   `json:"deviceId"`
-	DevicePub    string   `json:"devicePub"`
-	Password     string   `json:"password"`
-	OneTime      bool     `json:"oneTime"`
-	Expires      string   `json:"expires"`
-	Keep         bool     `json:"keep"`
-	AllowReshare bool     `json:"allowReshare"`
-	Note         string   `json:"note"`
+	Paths      []string `json:"paths"`
+	Target     string   `json:"target"`
+	Recipients []string `json:"recipients"`
+	Email      string   `json:"email"`
+	DeviceID   string   `json:"deviceId"`
+	DevicePub  string   `json:"devicePub"`
+	// Devices carries a multi-device send. DeviceID/DevicePub stay for the single
+	// case so nothing that speaks the old shape breaks.
+	Devices      []core.DeviceTarget `json:"devices"`
+	Password     string              `json:"password"`
+	OneTime      bool                `json:"oneTime"`
+	Expires      string              `json:"expires"`
+	Keep         bool                `json:"keep"`
+	AllowReshare bool                `json:"allowReshare"`
+	Note         string              `json:"note"`
 }
 
 // ShareOutcome is one path's result (the modal renders a row per path).
@@ -391,7 +394,11 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 			Note:         req.Note,
 		})
 	case "device":
-		res, err = c.SendToDevice(a.ctx, path, req.DeviceID, req.DevicePub)
+		targets := req.Devices
+		if len(targets) == 0 && req.DeviceID != "" {
+			targets = []core.DeviceTarget{{SessionID: req.DeviceID, PublicKey: req.DevicePub}}
+		}
+		res, err = c.SendToDevices(a.ctx, path, targets)
 	case "contact":
 		res, err = c.SendToContact(a.ctx, path, req.Email)
 	default:

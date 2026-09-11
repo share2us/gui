@@ -60,8 +60,11 @@ describe('which devices it offers', () => {
     await click(m, '[data-dest-opt="mydevice"]');
     expect(m.text()).toContain('phone');
     expect(m.text()).toMatch(/sign in with the app on that device/i);
-    const btn = m.$('.pick-cloud') as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
+    // The whole row is the control now, so "cannot be chosen" is an attribute on
+    // the row rather than a disabled button at the end of it.
+    const row = m.$('.pick-cloud') as HTMLElement;
+    expect(row.getAttribute('aria-disabled')).toBe('true');
+    expect(row.dataset.nokey).toBe('1');
   });
 
   it('explains an empty list rather than showing nothing', async () => {
@@ -84,7 +87,7 @@ describe('sending', () => {
     const m = await deviceTab({ ListDevices: async () => [laptop] });
     await click(m, '[data-dest-opt="mydevice"]');
     expect((m.$('#primary-btn') as HTMLButtonElement).disabled).toBe(true);
-    expect(m.text()).toMatch(/Pick one of your devices/i);
+    expect(m.text()).toMatch(/Pick one or more of your devices/i);
   });
 
   it('names the chosen device on the button', async () => {
@@ -103,11 +106,51 @@ describe('sending', () => {
     await click(m, '.pick-cloud');
     await click(m, '#primary-btn');
 
-    const sent = (m.calls.Share ?? [])[0]?.[0] as { target: string; deviceId: string; devicePub: string } | undefined;
+    const sent = (m.calls.Share ?? [])[0]?.[0] as
+      { target: string; devices: { sessionId: string; publicKey: string }[] } | undefined;
     expect(sent).toBeDefined();
     expect(sent?.target).toBe('device');
-    expect(sent?.deviceId).toBe('sess-1');
-    expect(sent?.devicePub).toBe('pk-1');
+    expect(sent?.devices).toEqual([{ sessionId: 'sess-1', publicKey: 'pk-1' }]);
+  });
+
+  // Several devices, ONE upload. The bytes go up once and the content key is
+  // sealed separately per device, which is what the upload API has always
+  // accepted. Sending to three machines must not cost three uploads.
+  it('sends to several devices in a single upload', async () => {
+    const second = { sessionId: 'sess-9', name: 'desktop', label: 'desktop:linux', publicKey: 'pk-9', hasKey: true, current: false };
+    const m = await deviceTab({
+      ListDevices: async () => [laptop, second],
+      Share: async () => [{ path: '/tmp/report.pdf', ok: true }],
+    });
+    await click(m, '[data-dest-opt="mydevice"]');
+    const rows = m.$$('.pick-cloud');
+    rows[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await m.settle(5);
+    m.$$('.pick-cloud')[1].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await m.settle(5);
+
+    expect(m.text()).toContain('Send 1 file to 2 devices');
+
+    await click(m, '#primary-btn');
+    const sent = (m.calls.Share ?? [])[0]?.[0] as
+      { devices: { sessionId: string; publicKey: string }[] } | undefined;
+    expect(m.calls.Share?.length).toBe(1);
+    expect(sent?.devices).toEqual([
+      { sessionId: 'sess-1', publicKey: 'pk-1' },
+      { sessionId: 'sess-9', publicKey: 'pk-9' },
+    ]);
+  });
+
+  // Clicking a chosen row again lets it go, which is the half of a toggle people
+  // discover by accident and then rely on.
+  it('unselects a device when its row is clicked again', async () => {
+    const m = await deviceTab({ ListDevices: async () => [laptop] });
+    await click(m, '[data-dest-opt="mydevice"]');
+    await click(m, '.pick-cloud');
+    expect(m.$('.pick-cloud')?.className).toContain('picked');
+    await click(m, '.pick-cloud');
+    expect(m.$('.pick-cloud')?.className).not.toContain('picked');
+    expect(m.text()).toMatch(/Pick one or more of your devices/i);
   });
 });
 
