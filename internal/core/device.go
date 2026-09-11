@@ -35,6 +35,20 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	}
 	out := make([]Device, 0, len(resp.Sessions))
 	for _, s := range resp.Sessions {
+		// A signed-in BROWSER is not a device and is left out entirely.
+		//
+		// It has no device keypair and cannot be given one, so it can never
+		// receive a sealed send. It used to sit in this list reading "can't
+		// receive yet - sign in with Share2Us on it", which is advice nobody can
+		// follow: there is nothing to install on Chrome. The app has no action
+		// that applies to a browser session either -- it cannot sign one out --
+		// so the row was noise carrying an impossible instruction.
+		//
+		// Sharing a file with yourself in a browser is what a link is for, and
+		// what "Only me" was built for.
+		if isBrowser(s.ClientType) {
+			continue
+		}
 		out = append(out, Device{
 			SessionID: s.ID,
 			Name:      s.DeviceName,
@@ -45,6 +59,12 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 		})
 	}
 	return out, nil
+}
+
+// isBrowser reports a session that is a web browser rather than a machine running
+// the app. The CLI makes the same distinction, and for the same reason.
+func isBrowser(clientType string) bool {
+	return strings.EqualFold(strings.TrimSpace(clientType), "web")
 }
 
 // deviceLabel renders "<device_name>:<os>" (e.g. "openclaw:linux").
