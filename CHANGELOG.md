@@ -13,6 +13,25 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+- **Sending to your own machine now goes straight across when it is on the same
+  network.** Choosing one of your devices used to upload the file and have that
+  machine download it, spending your quota twice, even when it was in the same
+  room. The app now checks first, and when the device is there the file goes
+  directly: nothing is uploaded, nothing is stored, and no quota is used. Picking
+  several machines still costs one upload for whichever of them are not here.
+  It falls back to uploading whenever it cannot — which is most of the time to
+  begin with, because a device only answers while it is actually listening, so
+  leaving "Discoverable on local network" on is what makes the direct path
+  available.
+- **You are asked before a file is uploaded to reach a device.** When the machine
+  you picked is not on this network, the app now says how much will be uploaded,
+  for which devices, and that it counts towards your storage quota — and waits
+  for you rather than just doing it. Cancelling uploads nothing. Picking several
+  machines is still one upload, and the dialog says the file's size rather than
+  multiplying it. When one of those devices could have taken the file directly,
+  it also tells you how to turn that on.
+
 ## [20260911120315] - 2026-09-11
 
 ### Changed

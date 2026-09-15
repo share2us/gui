@@ -6,9 +6,9 @@
 import { describe, it, expect } from 'vitest';
 import { mount, click } from './harness';
 
-const laptop = { sessionId: 'sess-1', name: 'laptop', label: 'laptop:linux', publicKey: 'pk-1', hasKey: true, current: false };
+const laptop = { sessionId: 'sess-1', name: 'laptop', label: 'laptop:linux', publicKey: 'pk-1', hasKey: true, current: false, lanFingerprint: 'fp-1' };
 const keyless = { sessionId: 'sess-2', name: 'phone', label: 'phone:android', publicKey: '', hasKey: false, current: false };
-const thisMachine = { sessionId: 'sess-3', name: 'openclaw', label: 'openclaw:linux', publicKey: 'pk-3', hasKey: true, current: true };
+const thisMachine = { sessionId: 'sess-3', name: 'openclaw', label: 'openclaw:linux', publicKey: 'pk-3', hasKey: true, current: true, lanFingerprint: 'fp-3' };
 
 const staged = { PendingPaths: async () => ['/tmp/report.pdf'] };
 
@@ -107,17 +107,20 @@ describe('sending', () => {
     await click(m, '#primary-btn');
 
     const sent = (m.calls.Share ?? [])[0]?.[0] as
-      { target: string; devices: { sessionId: string; publicKey: string }[] } | undefined;
+      { target: string; devices: { sessionId: string; publicKey: string; lanFingerprint: string; name: string }[] } | undefined;
     expect(sent).toBeDefined();
     expect(sent?.target).toBe('device');
-    expect(sent?.devices).toEqual([{ sessionId: 'sess-1', publicKey: 'pk-1' }]);
+    // lanFingerprint must ride along, or local-first routing (ADR-040) is
+    // silently off for every send from this screen: the Go side would see no
+    // fingerprint, match nothing, and upload even with the device in the room.
+    expect(sent?.devices).toEqual([{ sessionId: 'sess-1', publicKey: 'pk-1', lanFingerprint: 'fp-1', name: 'laptop' }]);
   });
 
   // Several devices, ONE upload. The bytes go up once and the content key is
   // sealed separately per device, which is what the upload API has always
   // accepted. Sending to three machines must not cost three uploads.
   it('sends to several devices in a single upload', async () => {
-    const second = { sessionId: 'sess-9', name: 'desktop', label: 'desktop:linux', publicKey: 'pk-9', hasKey: true, current: false };
+    const second = { sessionId: 'sess-9', name: 'desktop', label: 'desktop:linux', publicKey: 'pk-9', hasKey: true, current: false, lanFingerprint: 'fp-9' };
     const m = await deviceTab({
       ListDevices: async () => [laptop, second],
       Share: async () => [{ path: '/tmp/report.pdf', ok: true }],
@@ -133,11 +136,11 @@ describe('sending', () => {
 
     await click(m, '#primary-btn');
     const sent = (m.calls.Share ?? [])[0]?.[0] as
-      { devices: { sessionId: string; publicKey: string }[] } | undefined;
+      { devices: { sessionId: string; publicKey: string; lanFingerprint: string; name: string }[] } | undefined;
     expect(m.calls.Share?.length).toBe(1);
     expect(sent?.devices).toEqual([
-      { sessionId: 'sess-1', publicKey: 'pk-1' },
-      { sessionId: 'sess-9', publicKey: 'pk-9' },
+      { sessionId: 'sess-1', publicKey: 'pk-1', lanFingerprint: 'fp-1', name: 'laptop' },
+      { sessionId: 'sess-9', publicKey: 'pk-9', lanFingerprint: 'fp-9', name: 'desktop' },
     ]);
   });
 
