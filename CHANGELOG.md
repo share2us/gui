@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260915203819] - 2026-09-15
+
 ### Added
 - **Sending to your own machine now goes straight across when it is on the same
   network.** Choosing one of your devices used to upload the file and have that
