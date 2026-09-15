@@ -16,7 +16,7 @@ type ShareRequest = {
   recipients?: string[];
   deviceId?: string;
   devicePub?: string;
-  devices?: { sessionId: string; publicKey: string }[];
+  devices?: { sessionId: string; publicKey: string; lanFingerprint: string; name: string }[];
   password?: string;
   oneTime?: boolean;
   expires?: string;
@@ -73,7 +73,7 @@ type DownloadResult = { name: string; fingerprint: string; from: string; trusted
 // One of the account's own signed-in devices, reachable over the internet rather
 // than the local network. hasKey is false until that device has signed in and
 // registered an encryption key, and a device without one cannot be sent to.
-type CloudDevice = { sessionId: string; name: string; label: string; publicKey: string; hasKey: boolean; current: boolean };
+type CloudDevice = { sessionId: string; name: string; label: string; publicKey: string; hasKey: boolean; current: boolean; lanFingerprint: string };
 
 interface AppBackend {
   Status(): Promise<Status>;
@@ -112,6 +112,7 @@ interface AppBackend {
   OpenNetworkSettings(): Promise<void>;
   SetDiscoverable(on: boolean): Promise<void>;
   RespondLanRequest(id: string, accept: boolean): Promise<void>;
+  RespondCloudFallback(id: string, proceed: boolean): Promise<void>;
   TrustDevice(fingerprint: string, name: string, mode: string): Promise<TrustChallenge>;
   VerifyTrust(challengeId: string, code: string): Promise<void>;
   SetTrustMode(fingerprint: string, mode: string): Promise<void>;
@@ -182,7 +183,10 @@ const state = {
   cloudDevices: [] as CloudDevice[], // the account's own devices, for an over-the-internet send
   cloudDevicesLoading: false as boolean,
   cloudDevicesError: '' as string,
-  pickedCloud: [] as { sessionId: string; publicKey: string; name: string }[],
+  pickedCloud: [] as { sessionId: string; publicKey: string; name: string; lanFingerprint: string }[],
+  // A device send that is about to be uploaded, waiting on the user to accept the
+  // cost. Null when there is nothing to ask.
+  cloudAsk: null as { id: string; deviceNames: string[]; sizeBytes: number; directWasPossible: boolean } | null,
   // login
   loginPhase: 'idle' as 'idle' | 'waiting' | 'error',
   loginInfo: null as LoginInfo | null,
@@ -241,6 +245,17 @@ function render(): void {
   if (state.view === 'share') return renderShare();
   if (state.view === 'broadcast') return renderBroadcast();
   return renderHome();
+}
+
+// The cloud-cost prompt has to be reachable from EVERY view, not just home.
+//
+// It first lived only in renderHome's overlay stack, alongside the
+// incoming-request dialog — and would never have appeared, because a device send
+// is started from the SHARE view and that is where the user is standing when the
+// answer is needed. An overlay asking permission to spend money must render
+// wherever the question can arise, so each view includes this slot.
+function cloudAskSlot(): string {
+  return state.cloudAsk ? cloudAskOverlay(state.cloudAsk) : '';
 }
 
 // ---- Header ----------------------------------------------------------------
@@ -363,6 +378,7 @@ function renderHome(): void {
       <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
       ${settingsBlock()}
     </div>
+    ${cloudAskSlot()}
     ${state.requests.length ? requestOverlay(state.requests[0]) : ''}
     ${state.trustPrompt && !state.requests.length ? trustCodeOverlay(state.trustPrompt) : ''}
     ${state.peerPrompt ? peerConfirmOverlay(state.peerPrompt) : ''}
@@ -570,6 +586,7 @@ function renderShare(): void {
       <button class="btn-primary" id="primary-btn" ${canPrimary() ? '' : 'disabled'}>${escapeHtml(primaryLabel())}</button>
     </footer>
     ${state.peerPrompt ? peerConfirmOverlay(state.peerPrompt) : ''}
+    ${cloudAskSlot()}
     ${shaiPanel()}
     ${statusStrip()}
     ${buildStrip()}
@@ -711,6 +728,7 @@ function cloudDeviceList(): string {
         aria-checked="${picked ? 'true' : 'false'}"
         data-session="${escapeHtml(d.sessionId)}"
         data-key="${escapeHtml(d.publicKey)}" data-name="${escapeHtml(d.name)}"
+        data-lanfp="${escapeHtml(d.lanFingerprint)}"
         ${d.hasKey ? '' : 'data-nokey="1"'}
         title="${d.hasKey ? (picked ? 'Selected — click to unselect' : 'Click to select. Pick as many as you like.') : 'This device has no encryption key yet'}">
         <span class="n"><b>${escapeHtml(d.name)}</b>${escapeHtml(why)}</span>
@@ -779,6 +797,35 @@ function doneRow(c: BcConn): string {
 function accessLabel(a: string): string { return a === 'all' ? 'Allow all' : a === 'trusted' ? 'Trusted only' : 'Approve each'; }
 
 // ---- Overlays --------------------------------------------------------------
+
+// The cloud-cost prompt (ADR-040 / P1-5).
+//
+// A device send reached here because the machines below are NOT on this network,
+// so the file has to be uploaded. The owner's rule is that a user must know the
+// cloud is the paid part BEFORE it happens, so this asks rather than announces.
+//
+// Two things it is careful about:
+//   - ONE upload covers every device (the key is sealed per device), so the size
+//     is the file's size and never size x devices. Overstating it would push
+//     people off something cheaper than they think.
+//   - The "discoverable" hint appears only when one of THESE devices could
+//     actually have taken the file directly. Advice nobody can act on is the same
+//     fault as telling someone to install the app on their browser.
+function cloudAskOverlay(a: { deviceNames: string[]; sizeBytes: number; directWasPossible: boolean }): string {
+  const names = a.deviceNames.map((n) => escapeHtml(n)).join(', ');
+  const many = a.deviceNames.length > 1;
+  return `<div class="overlay"><div class="overlay-card">
+    <div class="overlay-title">Upload to the cloud?</div>
+    <div class="overlay-body">
+      <div>${many ? 'These devices are' : 'That device is'} not on this network, so <b>${fmtBytes(a.sizeBytes)}</b> will be uploaded for ${names}.</div>
+      <div class="hint">It counts towards your storage quota until it is collected or expires. Sending to a device on the same network costs nothing.</div>
+    </div>
+    ${a.directWasPossible
+      ? `<div class="hint">To send directly next time, turn on <b>Discoverable on local network</b> on that machine.</div>`
+      : ''}
+    <div class="overlay-actions"><button class="btn-hdr" id="cloud-cancel">Cancel</button><button class="btn-accept" id="cloud-go">Upload</button></div>
+  </div></div>`;
+}
 
 function requestOverlay(r: LanRequest): string {
   const who = escapeHtml(r.senderName || r.from);
@@ -1232,7 +1279,13 @@ async function sendToCloudDevice(): Promise<void> {
     const out = await backend().Share({
       paths: state.paths,
       target: 'device',
-      devices: targets.map((t) => ({ sessionId: t.sessionId, publicKey: t.publicKey })),
+      // lanFingerprint lets the send try the local network first (ADR-040): if
+      // that machine is answering here, the file goes straight across instead of
+      // up to the cloud and back down. Dropping it here would silently disable
+      // local-first for every send from this screen.
+      // name rides along so the cloud-cost dialog can say "laptop, desktop"
+      // rather than a list of session ids nobody can read.
+      devices: targets.map((t) => ({ sessionId: t.sessionId, publicKey: t.publicKey, lanFingerprint: t.lanFingerprint, name: t.name })),
     });
     const failed = out.find((o) => !o.ok);
     if (failed) {
@@ -1528,7 +1581,7 @@ function wire() {
     const already = state.pickedCloud.some((p) => p.sessionId === sessionId);
     state.pickedCloud = already
       ? state.pickedCloud.filter((p) => p.sessionId !== sessionId)
-      : [...state.pickedCloud, { sessionId, publicKey: el.dataset.key || '', name: el.dataset.name || sessionId }];
+      : [...state.pickedCloud, { sessionId, publicKey: el.dataset.key || '', name: el.dataset.name || sessionId, lanFingerprint: el.dataset.lanfp || '' }];
     render();
   };
   root.querySelectorAll<HTMLElement>('.pick-cloud').forEach((el) => {
@@ -1643,6 +1696,10 @@ function wire() {
     try { await backend().PeerRemember(p.name, p.fingerprint); } catch { /* not worth blocking the send */ }
     await sendTo(p.dest);
   });
+  // The user's own send is blocked on this answer, so both buttons must show the
+  // click landed.
+  busyClick('#cloud-cancel', () => respondCloudAsk(false));
+  busyClick('#cloud-go', () => respondCloudAsk(true));
   // The sender is blocked waiting on this answer, so the button must not look
   // like the click was missed.
   busyClick('#req-reject', () => respondRequest(false));
@@ -1877,6 +1934,9 @@ function setupListeners() {
     if (state.confirmDrop) { state.confirmDrop = null; render(); return; }
     if (state.shareResult) { state.shareResult = null; render(); return; }
     if (state.dl) { state.dl = null; render(); return; }
+    // Escape must not be the gesture that spends quota: dismissing this is a
+    // decision NOT to upload.
+    if (state.cloudAsk) { respondCloudAsk(false); return; }
     if (state.requests.length) { respondRequest(false); return; }
     if (state.view !== 'home') { state.view = 'home'; render(); }
   });
@@ -1901,12 +1961,33 @@ function setupListeners() {
     state.requests.push({ id: String(r.id), from: String(r.from || ''), name: String(r.name || 'file'), size: Number(r.size) || 0, fingerprint: String(r.fingerprint || ''), senderName: String(r.senderName || ''), code: String(r.code || ''), action: String(r.action || 'send') });
     render();
   });
+  rt?.EventsOn?.('cloud-fallback', (d: any) => {
+    if (!d?.id) return;
+    state.cloudAsk = {
+      id: String(d.id),
+      deviceNames: Array.isArray(d.deviceNames) ? d.deviceNames.map((n: any) => String(n)) : [],
+      sizeBytes: Number(d.sizeBytes) || 0,
+      directWasPossible: !!d.directWasPossible,
+    };
+    render();
+  });
   rt?.EventsOn?.('lan-recv-done', () => { refreshActivity().then(render); });
   rt?.EventsOn?.('incoming-changed', () => { refreshIncoming().then(render); });
   rt?.EventsOn?.('incoming-arrived', (d: any) => { queueSavePrompt(String(d?.id || '')); });
   rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); state.discSafety = String(d?.safety || ''); state.discAddr = String(d?.address || ''); render(); } });
   rt?.EventsOn?.('lan-bc-conn', async () => { try { state.bc = await backend().BroadcastStats(); if (state.view === 'broadcast' || (state.view === 'home')) render(); } catch { /* */ } });
   window.addEventListener('focus', () => checkClipboard());
+}
+
+// Answer the cloud-cost prompt. The send is blocked in Go until this lands, so
+// the state is cleared FIRST: a failed call must not leave a dialog on screen
+// that can never be answered again.
+async function respondCloudAsk(proceed: boolean) {
+  const ask = state.cloudAsk;
+  state.cloudAsk = null;
+  render();
+  if (!ask) return;
+  try { await backend().RespondCloudFallback(ask.id, proceed); } catch { /* the send times out with the app */ }
 }
 
 function addPaths(paths: string[]) {

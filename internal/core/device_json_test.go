@@ -24,7 +24,7 @@ func TestDeviceJSONMatchesTheFrontendContract(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	want := []string{"current", "hasKey", "label", "name", "publicKey", "sessionId"}
+	want := []string{"current", "hasKey", "label", "lanFingerprint", "name", "publicKey", "sessionId"}
 	keys := make([]string, 0, len(got))
 	for k := range got {
 		keys = append(keys, k)

@@ -133,7 +133,60 @@ func (c *Client) SendToDevices(ctx context.Context, path string, targets []Devic
 			return Result{}, errors.New("that device has no encryption key yet; sign in with the app on it first")
 		}
 	}
-	return c.sealedSend(ctx, path, sealedSendOpts{ownDevices: targets})
+
+	// LOCAL-FIRST (ADR-040). Anything answering on this network gets the file
+	// handed straight across: no upload session, no stored object, no quota. Only
+	// what is left goes to the cloud, and it goes as ONE upload with a sealed key
+	// per device exactly as before.
+	local, cloud := routeLocally(ctx, targets)
+	for _, lt := range local {
+		if err := sendDirect(ctx, path, lt, nil); err != nil {
+			// It answered a probe and then would not take the file — it stopped
+			// listening, or is waiting on an approval nobody is there to give. Put
+			// it back in the cloud list rather than losing the send.
+			cloud = append(cloud, lt.Target)
+		}
+	}
+	if len(cloud) == 0 {
+		// Everything went directly. There is no share to report because none was
+		// created, which is the point: nothing was uploaded and nothing is stored.
+		// Nothing to confirm either — asking about a cost nobody is about to incur
+		// would be the nag that teaches users to dismiss the dialog unread.
+		return Result{}, nil
+	}
+	if c.ConfirmCloud != nil && !c.ConfirmCloud(cloudFallbackFor(path, cloud, targets)) {
+		return Result{}, ErrCancelled
+	}
+	return c.sealedSend(ctx, path, sealedSendOpts{ownDevices: cloud})
+}
+
+// ErrCancelled reports a send the user declined at the cloud-cost prompt. It is
+// a decision, not a failure, and callers should not render it as an error.
+var ErrCancelled = errors.New("cancelled: nothing was uploaded and no quota was used")
+
+// cloudFallbackFor describes what is about to be uploaded and for whom.
+func cloudFallbackFor(path string, cloud, all []DeviceTarget) CloudFallback {
+	out := CloudFallback{}
+	for _, t := range cloud {
+		name := t.Name
+		if name == "" {
+			name = t.SessionID
+		}
+		out.DeviceNames = append(out.DeviceNames, name)
+		// "Direct was possible" is about the devices actually being uploaded for:
+		// one of THEM could have taken the file and did not. Whether some other
+		// device in the selection went directly is a different fact and would make
+		// the advice misleading.
+		if t.LanFingerprint != "" {
+			out.DirectWasPossible = true
+		}
+	}
+	if fi, err := os.Stat(path); err == nil {
+		// ONE upload covers every device in the list, so this is the file's size
+		// and not the size times the number of recipients.
+		out.SizeBytes = fi.Size()
+	}
+	return out
 }
 
 // SendToContact sends path to another account addressed by email. It only
@@ -168,6 +221,13 @@ func (c *Client) SendToContact(ctx context.Context, path, email string) (Result,
 type DeviceTarget struct {
 	SessionID string `json:"sessionId"`
 	PublicKey string `json:"publicKey"`
+	// LanFingerprint lets the send try the local network first (ADR-040). Empty
+	// simply means this target cannot be matched locally.
+	LanFingerprint string `json:"lanFingerprint"`
+	// Name is what the user picked this device by, carried so the cloud-cost
+	// prompt can name the machines it is about to upload for. A dialog listing
+	// session ids would be unreadable.
+	Name string `json:"name"`
 }
 
 type sealedSendOpts struct {

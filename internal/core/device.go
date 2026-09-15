@@ -24,6 +24,12 @@ type Device struct {
 	PublicKey string `json:"publicKey"` // sealed-box target key; "" when the device has no key yet
 	HasKey    bool   `json:"hasKey"`
 	Current   bool   `json:"current"` // true for this device
+	// LanFingerprint is this device's stable LAN identity fingerprint. It is what
+	// lets a send recognise that this device is ALSO answering on the local
+	// network right now and hand the file straight across, instead of paying to
+	// route it through the cloud (ADR-040). Empty means it cannot be matched
+	// locally: a client older than the field.
+	LanFingerprint string `json:"lanFingerprint"`
 }
 
 // Devices lists the account's own devices. Only HasKey devices can receive an
@@ -50,12 +56,13 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 			continue
 		}
 		out = append(out, Device{
-			SessionID: s.ID,
-			Name:      s.DeviceName,
-			Label:     deviceLabel(s),
-			PublicKey: s.PublicKey,
-			HasKey:    s.PublicKey != "",
-			Current:   s.Current,
+			SessionID:      s.ID,
+			Name:           s.DeviceName,
+			Label:          deviceLabel(s),
+			PublicKey:      s.PublicKey,
+			HasKey:         s.PublicKey != "",
+			Current:        s.Current,
+			LanFingerprint: s.LanFingerprint,
 		})
 	}
 	return out, nil

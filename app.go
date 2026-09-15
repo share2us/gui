@@ -235,6 +235,10 @@ func (a *App) clientOrErr() (*core.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The desktop app is the one caller that CAN ask, so it is the one that does.
+	// Anything without a window leaves this nil and uploads without a prompt,
+	// because a question nobody can answer must never block a transfer.
+	c.ConfirmCloud = a.promptCloudFallback
 	a.client = c
 	return c, nil
 }
@@ -1168,6 +1172,53 @@ func firstNonEmptyStr(a, b string) string {
 }
 
 // RespondLanRequest answers a pending "lan-request" prompt (accept or reject).
+// promptCloudFallback puts the cost of an upload in front of the user before it
+// happens, and blocks until they answer.
+//
+// Same shape as promptApproval: an id, a channel, an event to the UI, a wait.
+// Deliberately NOT a second mechanism — one way of asking the user something is
+// one way to get it wrong.
+//
+// It differs in the timeout. An incoming transfer gives up after
+// approvalWaitLimit because the sender is sitting there holding a connection
+// open. Here nothing is waiting on a socket: the user pressed send and walked
+// away, and the safe answer on a timeout is to NOT spend their quota. So this
+// waits on the user or the app closing, and a closed app cancels the send.
+func (a *App) promptCloudFallback(f core.CloudFallback) bool {
+	a.discMu.Lock()
+	if a.reqs == nil {
+		a.reqs = make(map[string]chan bool)
+	}
+	a.reqSeq++
+	id := "cloud" + strconv.FormatUint(a.reqSeq, 10)
+	ch := make(chan bool, 1)
+	a.reqs[id] = ch
+	a.discMu.Unlock()
+
+	wailsRuntime.EventsEmit(a.ctx, "cloud-fallback", map[string]any{
+		"id":                id,
+		"deviceNames":       f.DeviceNames,
+		"sizeBytes":         f.SizeBytes,
+		"directWasPossible": f.DirectWasPossible,
+	})
+
+	ok := false
+	select {
+	case ok = <-ch:
+	case <-a.ctx.Done():
+	}
+
+	a.discMu.Lock()
+	delete(a.reqs, id)
+	a.discMu.Unlock()
+	return ok
+}
+
+// RespondCloudFallback carries the user's answer back from the dialog. It shares
+// the request map with RespondLanRequest, so an id is answered once and only the
+// call that is waiting on it is unblocked.
+func (a *App) RespondCloudFallback(id string, proceed bool) { a.RespondLanRequest(id, proceed) }
+
 func (a *App) RespondLanRequest(id string, accept bool) {
 	a.discMu.Lock()
 	ch := a.reqs[id]

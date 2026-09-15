@@ -23,6 +23,12 @@ var ErrNotLoggedIn = errors.New("not logged in")
 type Client struct {
 	api  *clicore.Client
 	cred clicore.Credential
+	// ConfirmCloud, when set, is asked before a device send falls back to
+	// uploading, so the user sees the cost before it is incurred rather than
+	// after. Nil means proceed without asking — the right default for anything
+	// that cannot show a dialog, since a prompt nobody can answer must never be
+	// able to block a transfer.
+	ConfirmCloud ConfirmCloud
 }
 
 // Load builds a Client from the saved credential. This is the exact same store
