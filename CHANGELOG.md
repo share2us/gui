@@ -13,6 +13,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- **The Linux app now runs on current Ubuntu.** The Linux download for 64-bit
+  Intel and AMD machines was built against a system library that Ubuntu removed
+  after 22.04, so on Ubuntu 24.04 — and anything based on it — the app simply
+  would not start, and there was no way to install the missing piece. There are
+  now two Linux downloads for those machines: take the one ending `_webkit41`
+  on Ubuntu 24.04 or newer, and the plain one on 22.04. If the app is already
+  installed it will work this out for itself the next time it updates, including
+  on a machine that has since been upgraded to 24.04.
+
 ## [20260916200055] - 2026-09-16
 
 ### Fixed

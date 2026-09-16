@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -182,10 +184,85 @@ func pickAsset(rel ghRelease, goos, goarch string) (name, url string) {
 				return a.Name, a.URL
 			}
 		default: // linux
-			if a.Name == "share2us-gui_linux_"+goarch+".tar.gz" {
-				return a.Name, a.URL
-			}
+			// Two passes below, not here: Linux amd64 has a preferred asset and
+			// a fallback, and a single loop would take whichever appeared first
+			// in the release rather than the one that runs.
 		}
 	}
+	if goos != "windows" && goos != "darwin" {
+		return pickLinuxAsset(rel, goos, goarch)
+	}
 	return "", ""
+}
+
+// pickLinuxAsset prefers the build matching the installed webkit2gtk and falls
+// back to the other one.
+//
+// The fallback is not politeness. Releases cut before the webkit41 build existed
+// carry only the 4.0 asset, and returning nothing for them would surface as "no
+// update available" -- a worse answer than offering the only build there is,
+// because it is indistinguishable from being up to date and leaves the user with
+// no way to tell that an update was withheld.
+func pickLinuxAsset(rel ghRelease, goos, goarch string) (name, url string) {
+	preferred := linuxAssetName(goos, goarch)
+	fallback := "share2us-gui_" + goos + "_" + goarch + ".tar.gz"
+	var fallbackURL string
+	for _, a := range rel.Assets {
+		if a.Name == preferred {
+			return a.Name, a.URL
+		}
+		if a.Name == fallback {
+			fallbackURL = a.URL
+		}
+	}
+	if fallbackURL != "" {
+		return fallback, fallbackURL
+	}
+	return "", ""
+}
+
+// linuxAssetName picks between the two amd64 Linux builds, which are compiled
+// against different and mutually incompatible webkit2gtk generations.
+//
+// Ubuntu dropped libwebkit2gtk-4.0 after 22.04 and it is not installable on
+// 24.04, so the 4.0 build simply does not start there -- and the reverse is true
+// on 22.04, which has no 4.1. Offering the wrong one is not a degraded update,
+// it is an update to a binary that cannot run.
+//
+// This matters most for a machine that was FINE and then changed underneath the
+// app: someone on 22.04 who does a release upgrade keeps the app installed, and
+// without this the updater would go on handing them the 4.0 build forever.
+//
+// The probe is for 4.1 rather than 4.0 because 4.1 is the newer generation and
+// the one a fresh install will have; when neither is found, the 4.0 asset is the
+// safe answer, since that is the name every existing client already expects.
+func linuxAssetName(goos, goarch string) string {
+	base := "share2us-gui_" + goos + "_" + goarch
+	if goarch == "amd64" && webkit41Present() {
+		return base + "_webkit41.tar.gz"
+	}
+	return base + ".tar.gz"
+}
+
+// webkit41Present is a test seam. The real probe touches the filesystem, and a
+// test that depended on the runner's own libraries would assert whatever that
+// machine happens to have installed.
+var webkit41Present = hasWebkit41
+
+// hasWebkit41 reports whether libwebkit2gtk-4.1 is present. Checked by looking
+// for the shared object on the usual multiarch paths rather than by running
+// ldconfig: the updater may run in a context with a minimal PATH, and a missing
+// tool would read as "not installed" and quietly select the wrong build.
+func hasWebkit41() bool {
+	for _, dir := range []string{
+		"/usr/lib/x86_64-linux-gnu",
+		"/usr/lib64",
+		"/usr/lib",
+		"/lib/x86_64-linux-gnu",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, "libwebkit2gtk-4.1.so.0")); err == nil {
+			return true
+		}
+	}
+	return false
 }
