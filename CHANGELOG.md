@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260916200055] - 2026-09-16
+
 ### Fixed
 - **Sending straight to your own machine now works on more networks.** The app
   checks whether the device you picked is on this network before uploading, but
