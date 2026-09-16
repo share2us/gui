@@ -302,16 +302,13 @@ jobs:
           Get-ChildItem installer\windows\Output\*.exe | ForEach-Object {
             & $env:SIGNTOOL sign /sha1 $env:SIGN_THUMB /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
           }
-          # Publish a SHA-256 next to Setup.exe. The in-app updater downloads THIS
-          # asset, and until now it was the only published artifact with no hash,
-          # so the updater had nothing to verify against. Authenticode cannot serve
-          # that purpose here: the signing cert is generated fresh by
-          # New-SelfSignedCertificate on every run, so it chains to nothing and its
-          # thumbprint changes each release.
-          Get-ChildItem installer\windows\Output\*.exe | ForEach-Object {
-            (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower() |
-              Set-Content -Encoding ascii ($_.FullName + '.sha256')
-          }
+          # Checksums are NOT written here any more. They are generated for every
+          # asset at once in the publish job, on a runner with GNU coreutils, so
+          # there is one implementation and one format rather than a PowerShell
+          # copy that can drift from the bash one. Authenticode does not cover
+          # this either way: the signing cert is generated fresh by
+          # New-SelfSignedCertificate on every run, so it chains to nothing and
+          # its thumbprint changes each release.
           # Stage the standalone (unsigned) MSIX next to Setup.exe so the artifact
           # is a single flat folder (one common root -> upload/download stays flat,
           # and the publish glob only ever sees files, never subdirectories).
@@ -351,6 +348,42 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with: { path: staging, pattern: "pkg-*", merge-multiple: true }
+      # Every asset gets BOTH sidecars, here, because this is the job that decides
+      # what gets uploaded -- so "published" and "has checksums" cannot diverge.
+      #
+      # They diverged before: the five archives had .sha256 and .crc32 from the
+      # build matrix, Setup.exe had only .sha256 from a separate PowerShell step,
+      # and the .msix had neither. Three producers, three answers. Anything added
+      # to the release in future is covered without remembering to add a fourth.
+      #
+      # Formats match the build matrix exactly and deliberately: cksum's full
+      # "<crc> <bytes> <name>" line for .crc32, and a bare lowercase hash for
+      # .sha256. Consistency with what already ships matters more than either
+      # format being the nicer one.
+      - name: Checksums for every asset
+        run: |
+          set -euo pipefail
+          cd staging
+          # -prune on the sidecars, so this never hashes a hash.
+          while IFS= read -r f; do
+            [ -s "$f.crc32" ]  || cksum "$f" > "$f.crc32"
+            [ -s "$f.sha256" ] || sha256sum "$f" | awk '{print $1}' > "$f.sha256"
+          done < <(find . -type f ! -name '*.crc32' ! -name '*.sha256' | sort)
+          # Fail loudly rather than shipping a half-checksummed release: a missing
+          # hash is only discoverable later, by someone who cannot verify a
+          # download and has no way to tell whether that is expected.
+          missing=0
+          while IFS= read -r f; do
+            for ext in crc32 sha256; do
+              if [ ! -s "$f.$ext" ]; then
+                echo "::error::$f has no .$ext"
+                missing=1
+              fi
+            done
+          done < <(find . -type f ! -name '*.crc32' ! -name '*.sha256' | sort)
+          [ "$missing" -eq 0 ]
+          ls -la
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
