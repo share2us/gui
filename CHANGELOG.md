@@ -13,6 +13,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- **Sending straight to your own machine now works on more networks.** The app
+  checks whether the device you picked is on this network before uploading, but
+  on some networks that check never reached it: anything on a wide network
+  range, which includes most corporate ones and anything using Docker, was
+  skipped entirely. The device showed up in the nearby list while a file sent to
+  that very machine quietly went via the cloud instead, spending quota for no
+  reason. It now asks the network for the device's address directly rather than
+  sweeping for it, so the direct path is available in the places it was silently
+  being lost.
+
 ## [20260915203819] - 2026-09-15
 
 ### Added
