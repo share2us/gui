@@ -139,7 +139,16 @@ jobs:
             # renaming it would strand every installed client on the version it
             # already has.
             name="share2us-gui_${os}_${arch}${{ matrix.suffix }}.tar.gz"
-            tar -C build/bin -czf "dist/$name" share2us-gui
+            # The icon ships INSIDE the Linux tarball. Windows gets one for free
+            # (Wails embeds icon.ico in the exe, so shortcuts and Add/Remove
+            # Programs read it from there) and macOS carries one in the .app
+            # bundle -- Linux was the only platform with nothing, so its desktop
+            # entry showed the generic placeholder every launcher falls back to.
+            # An app with no icon in the applications list looks broken or
+            # untrusted, which is a poor first impression for a file-sharing tool.
+            # Named share2us.png, which is what install.sh looks for.
+            cp build/appicon.png build/bin/share2us.png
+            tar -C build/bin -czf "dist/$name" share2us-gui share2us.png
           fi
           ( cd dist && cksum "$name" > "$name.crc32" && $SHA "$name" | awk '{print $1}' > "$name.sha256" )
           ls -la dist
