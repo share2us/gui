@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260916202108] - 2026-09-16
+
 ### Fixed
 - **The Linux app now runs on current Ubuntu.** The Linux download for 64-bit
   Intel and AMD machines was built against a system library that Ubuntu removed
