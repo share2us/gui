@@ -47,6 +47,12 @@ OutputBaseFilename=Share2Us-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; The installer's OWN icon. Without this Setup.exe ships with Inno Setup's
+; default, which is the very first thing a user sees of Share2Us and the moment
+; they decide whether the download is what they think it is. The app's shortcuts
+; already get the icon for free (Windows reads it out of the exe, where Wails
+; embeds it); the installer was the one surface with nothing.
+SetupIconFile=..\..\build\windows\icon.ico
 ArchitecturesInstallIn64BitMode=x64compatible
 ; Admin: the Share-sheet task trusts the bundled cert (LocalMachine) and installs
 ; the MSIX. Power users may force per-user, but then that task's cert-trust + MSIX
@@ -55,6 +61,9 @@ PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog commandline
 ; We modify the user PATH for the CLI component.
 ChangesEnvironment=yes
+; Add/Remove Programs shows this next to the entry. It defaults to the
+; uninstaller's icon, which is not the app's.
+UninstallDisplayIcon={app}\{#GuiExe}
 
 [Types]
 Name: "full"; Description: "Everything (app + command-line)"

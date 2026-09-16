@@ -14,6 +14,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 ## [Unreleased]
 
 ### Fixed
+- **The app has an icon on Linux.** Installing on Linux put Share2Us in your
+  applications list with the blank placeholder every desktop falls back to,
+  because the download carried no icon at all. It does now, so the app looks
+  like itself in the launcher and the dock. Windows and macOS were never
+  affected.
+- **The Windows installer looks like Share2Us.** `Share2Us-Setup` showed a
+  generic setup icon, which is the first thing you see of the app and the moment
+  you decide whether the download is what you think it is. It, and the entry in
+  Add or remove programs, now carry the app's own icon.
+
+### Fixed
 - **The Linux app now runs on current Ubuntu.** The Linux download for 64-bit
   Intel and AMD machines was built against a system library that Ubuntu removed
   after 22.04, so on Ubuntu 24.04 — and anything based on it — the app simply
