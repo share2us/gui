@@ -359,12 +359,104 @@ jobs:
   # A partial release is worse than no release: no release is visible and gets
   # fixed, while a partial one looks finished and quietly breaks installs. If a
   # leg fails, fix it and re-run; nothing ships in the meantime.
+  # Every platform build goes out green and not one of them is ever EXECUTED
+  # before a user executes it. "It compiled" was the whole of the evidence, which
+  # is how a Linux binary that cannot start on the most common Linux desktop
+  # shipped with a fully green pipeline on 2026-09-16: it linked against
+  # libwebkit2gtk-4.0, which Ubuntu removed after 22.04 and which cannot be
+  # installed on 24.04 at all. Nothing caught it because nothing tried to run it.
+  #
+  # This runs BEFORE publish, on purpose. A smoke test after publish tells you a
+  # broken release exists; this one stops it existing.
+  #
+  # Each artifact is checked on the distro it TARGETS, which is the only way the
+  # question means anything -- the 4.0 build is *supposed* to fail on 24.04, and
+  # a single runner would either miss the bug or invent one.
+  smoke:
+    needs: [version, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: linux-amd64,          os: ubuntu-22.04,     webkit: "4.0", asset: share2us-gui_linux_amd64.tar.gz }
+          - { id: linux-amd64-webkit41, os: ubuntu-24.04,     webkit: "4.1", asset: share2us-gui_linux_amd64_webkit41.tar.gz }
+          - { id: linux-arm64,          os: ubuntu-24.04-arm, webkit: "4.1", asset: share2us-gui_linux_arm64.tar.gz }
+          - { id: darwin,               os: macos-latest,                    asset: share2us-gui_darwin_universal.zip }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { name: "pkg-${{ matrix.id }}", path: art }
+
+      # The same -dev package the build installs, so the smoke runner matches the
+      # build runner rather than approximating it. The runtime package names
+      # differ between generations (libwebkit2gtk-4.0-37 vs -4.1-0); -dev does not.
+      - name: Install the runtime this build targets
+        if: matrix.webkit != ''
+        run: sudo apt-get update && sudo apt-get install -y "libwebkit2gtk-${{ matrix.webkit }}-dev"
+
+      - name: Checksums must verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd art
+          # Not a formality: a truncated upload passes every "file exists" check
+          # and fails only for the user who downloads it.
+          if command -v sha256sum >/dev/null; then SHA="sha256sum"; else SHA="shasum -a 256"; fi
+          want=$(cat "${{ matrix.asset }}.sha256")
+          got=$($SHA "${{ matrix.asset }}" | awk '{print $1}')
+          [ "$want" = "$got" ] || { echo "::error::sha256 mismatch: want $want got $got"; exit 1; }
+          echo "sha256 ok"
+
+      - name: It must actually resolve and run
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd art
+          case "${{ matrix.asset }}" in
+            *.tar.gz)
+              tar xzf "${{ matrix.asset }}"
+              [ -x share2us-gui ] || { echo "::error::share2us-gui missing or not executable"; exit 1; }
+              # THE CHECK THAT WOULD HAVE CAUGHT IT. A dynamic dependency the
+              # target distro cannot supply is indistinguishable from a working
+              # binary until someone runs it.
+              if ldd share2us-gui | grep -F "not found"; then
+                echo "::error::unresolved shared libraries on ${{ matrix.os }} -- this build cannot start there"
+                exit 1
+              fi
+              echo "ldd clean on ${{ matrix.os }}"
+              # Asserted, not attempted. --version exits without opening a
+              # window, so it needs no display, and it upgrades this test from
+              # "the binary links" to "the binary STARTS" -- which is the claim
+              # a green pipeline was making all along without checking.
+              # Confirmed on both target distros before being made a hard gate.
+              got="$(./share2us-gui --version 2>&1 | head -1)"
+              [ -n "$got" ] || { echo "::error::--version printed nothing; the binary did not start"; exit 1; }
+              [ "$got" = "${{ needs.version.outputs.v }}" ] || {
+                echo "::error::--version says '$got', this release is '${{ needs.version.outputs.v }}' -- the archive holds the wrong build"; exit 1; }
+              echo "runs, and reports $got"
+              ;;
+            *.zip)
+              unzip -q "${{ matrix.asset }}"
+              app=share2us-gui.app
+              [ -d "$app" ] || { echo "::error::$app missing from the archive"; exit 1; }
+              for f in Contents/Info.plist Contents/MacOS/share2us-gui; do
+                [ -e "$app/$f" ] || { echo "::error::$app/$f missing"; exit 1; }
+              done
+              [ -x "$app/Contents/MacOS/share2us-gui" ] || { echo "::error::app binary not executable"; exit 1; }
+              # Universal or it silently excludes half the Macs we claim to support.
+              file "$app/Contents/MacOS/share2us-gui" | grep -q "universal binary" || {
+                echo "::error::not a universal binary -- one architecture would get nothing"; exit 1; }
+              echo "bundle ok, universal"
+              ;;
+          esac
+
   publish:
-    needs: [version, build, installer]
+    needs: [version, build, installer, smoke]
     if: >-
       ${{ needs.version.result == 'success'
           && needs.build.result == 'success'
-          && needs.installer.result == 'success' }}
+          && needs.installer.result == 'success'
+          && needs.smoke.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       # The release notes come from CHANGELOG.md, so this job needs the repo, not
