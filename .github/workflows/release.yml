@@ -478,6 +478,36 @@ jobs:
       # "<crc> <bytes> <name>" line for .crc32, and a bare lowercase hash for
       # .sha256. Consistency with what already ships matters more than either
       # format being the nicer one.
+      # A permanent URL for the Windows installer.
+      #
+      # Every OTHER asset is already stable -- share2us-gui_linux_amd64.tar.gz
+      # and friends carry no version -- so
+      # /releases/latest/download/<name> has always worked for them. The two
+      # Windows artifacts are the exception: their names embed the build version
+      # (Share2Us-Setup-20260916202108.exe), and GitHub's latest/download route
+      # needs an EXACT name, so there is no URL a download button can hardcode.
+      # That is why share2.us links to the releases page rather than the
+      # installer, which is one click more than it should be.
+      #
+      # A copy, not a rename: the versioned name is what release notes, support
+      # threads and anyone pinning a specific build refer to, and it must keep
+      # working. The copy costs ~18 MB per release and buys a link that never
+      # goes stale.
+      - name: Stable-named copy of the Windows installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd staging
+          setup=$(find . -maxdepth 1 -name 'Share2Us-Setup-*.exe' | head -1)
+          if [ -n "$setup" ]; then
+            cp "$setup" ./Share2Us-Setup.exe
+            echo "aliased $(basename "$setup") -> Share2Us-Setup.exe"
+          else
+            # Not fatal: the installer job can be skipped, and a release without
+            # Windows is still a release. Silence would be worse than a warning.
+            echo "::warning::no Share2Us-Setup-*.exe found; no stable alias published"
+          fi
+
       - name: Checksums for every asset
         run: |
           set -euo pipefail
