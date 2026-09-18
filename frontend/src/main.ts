@@ -2003,11 +2003,21 @@ async function onPaste(e: ClipboardEvent) {
   for (const item of Array.from(cd.items)) {
     if (item.kind === 'file' && item.type.startsWith('image/')) {
       const blob = item.getAsFile();
-      if (blob) { e.preventDefault(); try { addPaths([await backend().AddPasted(extFromMime(item.type), await blobToBase64(blob))]); state.view = 'share'; render(); } catch { /* */ } return; }
+      if (blob) { e.preventDefault(); try { addPaths([await backend().AddPasted(extFromMime(item.type), await blobToBase64(blob))]); state.view = 'share'; render(); } catch (err) { pasteFailed(err); } return; }
     }
   }
   const text = cd.getData('text');
-  if (text && text.trim()) { e.preventDefault(); try { addPaths([await backend().AddPasted(looksLikeMarkdown(text) ? 'md' : 'txt', utf8ToBase64(text))]); state.view = 'share'; render(); } catch { /* */ } }
+  if (text && text.trim()) { e.preventDefault(); try { addPaths([await backend().AddPasted(looksLikeMarkdown(text) ? 'md' : 'txt', utf8ToBase64(text))]); state.view = 'share'; render(); } catch (err) { pasteFailed(err); } }
+}
+
+// A paste that fails must SAY so. It used to be swallowed, and the only symptom
+// was the canvas still asking for a file after you had pasted one -- which reads
+// as "paste is not supported here" rather than "that went wrong". It hid a real
+// bug for as long as the bug existed: the pasted file was created and then
+// refused, and nothing on screen ever said either half.
+function pasteFailed(err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  toast(msg.trim() ? `Could not paste: ${msg}` : 'Could not paste that.');
 }
 
 // ---- Tiny helpers ----------------------------------------------------------

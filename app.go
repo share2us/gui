@@ -168,7 +168,7 @@ func (a *App) AddPasted(ext, dataB64 string) (string, error) {
 	if len(raw) > maxPasteBytes {
 		return "", errors.New("clipboard content is too large")
 	}
-	return writeTempShare(raw, ext)
+	return a.writeTempShare(raw, ext)
 }
 
 // ClipboardSuggestion reports shareable content currently on the OS clipboard so
@@ -196,12 +196,36 @@ func (a *App) AddClipboard(kind string) (string, error) {
 	if len(raw) > maxPasteBytes {
 		return "", errors.New("clipboard content is too large")
 	}
-	return writeTempShare(raw, ext)
+	return a.writeTempShare(raw, ext)
 }
 
-// writeTempShare writes raw to a uniquely-named temp file (ext without the dot)
-// and returns its path. Shared by the browser paste path and the clipboard read.
-func writeTempShare(raw []byte, ext string) (string, error) {
+// writeTempShare writes raw to a uniquely-named temp file (ext without the dot),
+// permits it, and returns its path. Shared by the browser paste path and the
+// clipboard read.
+//
+// It is a METHOD, and the reason is the bug it fixes. Clipboard
+// content arrives by two doors -- AddPasted (Ctrl+V) and AddClipboard (the
+// "Share copied text" chip) -- and both wrote a temp file and handed back its
+// path without telling the path vault. Share then refused that path as one the
+// user never picked (§AJ #26), so pasting looked like nothing happened: the file
+// existed, the UI listed it, and the share silently would not go.
+//
+// Vouching HERE rather than at each caller is deliberate. Every other path
+// source does it at the call site and two of them were simply missed; a third
+// door would have been missed the same way. Writing the file and permitting it
+// are now one operation, because for clipboard content they are the same event:
+// we created this file from what the user themselves put on the clipboard, which
+// is as much "the user chose it" as a drop or a file picker.
+func (a *App) writeTempShare(raw []byte, ext string) (string, error) {
+	path, err := writeTempShareFile(raw, ext)
+	if err != nil {
+		return "", err
+	}
+	a.chosen.allow(path)
+	return path, nil
+}
+
+func writeTempShareFile(raw []byte, ext string) (string, error) {
 	dir, err := os.MkdirTemp("", "share2us-paste-")
 	if err != nil {
 		return "", err
