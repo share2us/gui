@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260918154140] - 2026-09-18
+
 ### Fixed
 - **Pasting text or a link can be shared again.** Copying something and pressing
   Ctrl+V, or using the "Share copied text" button, appeared to do nothing: the
