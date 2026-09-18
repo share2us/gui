@@ -13,6 +13,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- **Pasting text or a link can be shared again.** Copying something and pressing
+  Ctrl+V, or using the "Share copied text" button, appeared to do nothing: the
+  window kept asking for a file as though nothing had been pasted. The file was
+  in fact being created and then refused at the last moment by the check that
+  makes sure the app only ever sends files you actually chose — pasting had been
+  left out of what counts as choosing. It counts now.
+- **A paste that goes wrong says so.** When it failed there was no message at
+  all, which is why the problem above looked like paste simply not working
+  rather than something going wrong.
+
 ## [20260916202108] - 2026-09-16
 
 ### Fixed
