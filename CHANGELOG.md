@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929195258] - 2026-09-29
+
 ### Fixed
 - **The Windows installer's command line is current, and it is the one that
   runs.** The installer put `s2u.exe` under Program Files and first on your PATH,
