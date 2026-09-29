@@ -13,6 +13,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- **The Windows installer's command line is current, and it is the one that
+  runs.** The installer put `s2u.exe` under Program Files and first on your PATH,
+  where it could never update itself and hid any newer `s2u`, so `s2u` stayed at
+  whatever version the installer carried. The command line now installs for your
+  user in `%LOCALAPPDATA%\Share2Us\bin`, the same place as
+  `irm https://share2.us/install.ps1 | iex`, as both `s2u` and `share2us`, and
+  `s2u update` keeps it current. Installing over an older version removes the
+  old Program Files copy and its PATH entry. Open a new terminal after
+  installing: one that was already open keeps its old PATH.
+
 ## [20260918154140] - 2026-09-18
 
 ### Fixed

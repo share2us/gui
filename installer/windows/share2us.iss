@@ -29,6 +29,13 @@
 #ifndef DistDir
   #define DistDir "dist"
 #endif
+; The CLI lives per user, in the same folder install.ps1 uses, not under
+; Program Files. There `s2u update` can replace it without admin rights, and a
+; CLI installed with `irm https://share2.us/install.ps1 | iex` is the same copy
+; rather than a second one. Before 2026-09-30 it went to {app}: that copy could
+; never update itself, and it sat first on the user PATH, so it shadowed every
+; newer CLI (owner, 2026-09-30: the VM ran a two-week-old s2u).
+#define CliDir "{localappdata}\Share2Us\bin"
 
 [Setup]
 AppId={{A7F3C1E2-5B84-4D93-9E17-2C6A8F0B4D51}
@@ -86,7 +93,9 @@ Name: "autoreceive"; Description: "Receive files sent to this device (start at l
 [Files]
 Source: "{#DistDir}\{#GuiExe}"; DestDir: "{app}"; Components: gui; Flags: ignoreversion
 ; skipifsourcedoesntexist: build the installer even if the CLI binary wasn't bundled.
-Source: "{#DistDir}\{#CliExe}"; DestDir: "{app}"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
+; Both names, as install.ps1 ships them: s2u.exe and share2us.exe are the same binary.
+Source: "{#DistDir}\{#CliExe}"; DestDir: "{#CliDir}"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#DistDir}\{#CliExe}"; DestDir: "{#CliDir}"; DestName: "share2us.exe"; Components: cli; Flags: ignoreversion skipifsourcedoesntexist
 ; The licence ships NEXT TO the app, not as a click-through page. Share2Us is
 ; GPL-3.0-only, and the GPL needs no acceptance to USE the software — presenting
 ; it as an EULA you must agree to before installing misrepresents what it is.
@@ -96,6 +105,10 @@ Source: "{#DistDir}\{#CliExe}"; DestDir: "{app}"; Components: cli; Flags: ignore
 ; is set), so ..\..\ is the repo root.
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\..\THIRD-PARTY-NOTICES.md"; DestDir: "{app}"; DestName: "THIRD-PARTY-NOTICES.txt"; Flags: ignoreversion
+
+[InstallDelete]
+; The CLI copy an older installer put under Program Files (see CliDir).
+Type: files; Name: "{app}\{#CliExe}"
 
 [Icons]
 Name: "{group}\Share2Us"; Filename: "{app}\{#GuiExe}"; Components: gui
@@ -137,9 +150,10 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
 Filename: "{app}\{#GuiExe}"; Parameters: "--uninstall-shell"; Components: gui; Flags: runhidden; RunOnceId: "s2uUnregisterShell"
 
 [Registry]
-; Append the install dir to the user PATH so `s2u` works from any terminal.
+; Append the CLI dir to the user PATH so `s2u` works from any terminal (a new
+; one: a window that was already open keeps its old PATH).
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
-  ValueData: "{olddata};{app}"; Components: cli; Check: NeedsAddPath('{app}'); \
+  ValueData: "{olddata};{#CliDir}"; Components: cli; Check: NeedsAddPath('{#CliDir}'); \
   Flags: preservestringtype
 
 [Code]
@@ -156,25 +170,39 @@ begin
   Result := Pos(';' + Uppercase(ExpandConstant(Param)) + ';', ';' + Uppercase(OrigPath) + ';') = 0;
 end;
 
-{ On uninstall, strip our install dir from the user PATH (best effort). }
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+{ Remove one directory from the user PATH, if it is there (best effort). }
+procedure RemoveFromUserPath(Dir: string);
 var
-  OrigPath, AppDir, Needle: string;
+  OrigPath, Needle: string;
   P: Integer;
 begin
-  if CurUninstallStep <> usUninstall then
-    exit;
   if not RegQueryStringValue(HKCU, 'Environment', 'Path', OrigPath) then
     exit;
-  AppDir := ExpandConstant('{app}');
   Needle := ';' + Uppercase(OrigPath) + ';';
-  P := Pos(';' + Uppercase(AppDir) + ';', Needle);
+  P := Pos(';' + Uppercase(Dir) + ';', Needle);
   if P = 0 then
     exit;
-  { Rebuild PATH without the AppDir segment. }
-  Delete(OrigPath, P, Length(AppDir) + 1);
+  { Rebuild PATH without the Dir segment. }
+  Delete(OrigPath, P, Length(Dir) + 1);
   { Trim any accidental leading/trailing ';'. }
   while (Length(OrigPath) > 0) and (OrigPath[1] = ';') do Delete(OrigPath, 1, 1);
   while (Length(OrigPath) > 0) and (OrigPath[Length(OrigPath)] = ';') do Delete(OrigPath, Length(OrigPath), 1);
   RegWriteExpandStringValue(HKCU, 'Environment', 'Path', OrigPath);
+end;
+
+{ After installing: drop the Program Files entry an older installer added for
+  the CLI, so it cannot shadow the per-user copy. }
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    RemoveFromUserPath(ExpandConstant('{app}'));
+end;
+
+{ On uninstall, strip our directories from the user PATH. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep <> usUninstall then
+    exit;
+  RemoveFromUserPath(ExpandConstant('{#CliDir}'));
+  RemoveFromUserPath(ExpandConstant('{app}'));
 end;
