@@ -91,3 +91,10 @@ func deviceLabel(s clicore.DeviceSession) string {
 	}
 	return name + ":" + strings.ToLower(osName)
 }
+
+// AgentSessions returns the reachable agent directory (own-device and project
+// member agents) for the GUI's "Send to your agents" target list. It is a thin
+// pass-through to cli-core; the GUI decides ordering and presentation.
+func (c *Client) AgentSessions(ctx context.Context) ([]clicore.AgentSessionInfo, error) {
+	return c.api.ListAgentSessions(ctx)
+}

@@ -340,6 +340,18 @@ func (a *App) ListDevices() ([]core.Device, error) {
 	return c.Devices(a.ctx)
 }
 
+// ListAgents returns the bound agent sessions this account can reach: the "Send
+// to your agents" directory, the same one `s2u agent list` shows. Own devices
+// and project member agents both appear; the caller shows online ones first.
+// Listing only, so the UI can populate the target list without staging a send.
+func (a *App) ListAgents() ([]clicore.AgentSessionInfo, error) {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return nil, err
+	}
+	return c.AgentSessions(a.ctx)
+}
+
 // ShareRequest is the modal's submit payload. Target selects the destination:
 // "public" | "private" | "only-me" | "device" | "contact".
 type ShareRequest struct {
