@@ -74,6 +74,9 @@ type DownloadResult = { name: string; fingerprint: string; from: string; trusted
 // than the local network. hasKey is false until that device has signed in and
 // registered an encryption key, and a device without one cannot be sent to.
 type CloudDevice = { sessionId: string; name: string; label: string; publicKey: string; hasKey: boolean; current: boolean; lanFingerprint: string };
+// AgentSession mirrors core.AgentSessionInfo (app.go ListAgents): one reachable
+// bound agent in the "Send to your agents" directory.
+type AgentSession = { session_id: string; tool: string; name: string; project: string; status: string; device_id: string; device_name: string; device_public_key: string; last_seen: string };
 
 interface AppBackend {
   Status(): Promise<Status>;
@@ -81,6 +84,7 @@ interface AppBackend {
   PickFiles(): Promise<string[]>;
   Share(req: ShareRequest): Promise<ShareOutcome[]>;
   ListDevices(): Promise<CloudDevice[]>;
+  ListAgents(): Promise<AgentSession[]>;
   BeginLogin(): Promise<LoginInfo>;
   CompleteLogin(): Promise<Status>;
   SetAutostart(on: boolean): Promise<void>;
@@ -183,6 +187,9 @@ const state = {
   cloudDevices: [] as CloudDevice[], // the account's own devices, for an over-the-internet send
   cloudDevicesLoading: false as boolean,
   cloudDevicesError: '' as string,
+  agents: [] as AgentSession[], // bound agents reachable for "Send to your agents"
+  agentsLoading: false as boolean,
+  agentsError: '' as string,
   pickedCloud: [] as { sessionId: string; publicKey: string; name: string; lanFingerprint: string }[],
   // A device send that is about to be uploaded, waiting on the user to accept the
   // cost. Null when there is nothing to ask.
@@ -229,6 +236,7 @@ async function boot() {
     if (!state.storeManaged) checkForUpdate();
     checkClipboard();
     findNearby(); // populate nearby devices/broadcasts on open
+    void loadAgents(); // populate the "Send to your agents" directory on open
     // The feed's three sections all arrive asynchronously; release the reserved
     // space once the first round has landed, whether or not it found anything.
     void Promise.allSettled([refreshActivity(), refreshIncoming()]).then(() => {
@@ -375,7 +383,7 @@ function renderHome(): void {
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
-      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
+      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionAgents()}${sectionIncoming()}${sectionRecent()}`}</div>
       ${settingsBlock()}
     </div>
     ${cloudAskSlot()}
@@ -751,6 +759,49 @@ async function loadCloudDevices(): Promise<void> {
     state.cloudDevicesLoading = false;
     render();
   }
+}
+
+async function loadAgents(): Promise<void> {
+  if (!state.status?.loggedIn) return;
+  state.agentsLoading = true;
+  state.agentsError = '';
+  render();
+  try {
+    state.agents = (await backend().ListAgents()) || [];
+  } catch (e) {
+    state.agentsError = String(e);
+  } finally {
+    state.agentsLoading = false;
+    render();
+  }
+}
+
+// "Send to your agents": the reachable bound-agent directory. Shown only when
+// signed in. Listing for now; a send action lands with the file-to-agent
+// transport. Online agents (status "available") come before idle/offline.
+function sectionAgents(): string {
+  if (!state.status?.loggedIn) return '';
+  if (state.agentsLoading && !state.agents.length) {
+    return `<div class="sec-head"><b>Your agents</b></div><div class="empty">Looking for your agents…</div>`;
+  }
+  if (state.agentsError) {
+    return `<div class="sec-head"><b>Your agents</b><button class="refresh" id="agents-refresh" title="Look again">↻</button></div><div class="warn-line">${escapeHtml(state.agentsError)}</div>`;
+  }
+  if (!state.agents.length) return '';
+  const rank = (s: string): number => (s === 'available' ? 0 : s === 'busy' ? 1 : 2);
+  const agents = [...state.agents].sort((a, b) => rank(a.status) - rank(b.status));
+  const rows = agents
+    .map((ag) => {
+      const title = ag.name?.trim() || ag.project || ag.session_id;
+      const where = ag.device_name?.trim() ? ` · on ${escapeHtml(ag.device_name)}` : '';
+      const dot = ag.status === 'available' ? '🟢' : ag.status === 'busy' ? '🟠' : '⚪';
+      return `<div class="item agent-row" data-agent="${escapeHtml(ag.session_id)}" title="${escapeHtml(ag.tool)} agent${where ? ' ' + escapeHtml(where) : ''}">
+      <div class="ico">${dot}</div>
+      <div class="line"><b>${escapeHtml(title)}</b> <span class="meta">· ${escapeHtml(ag.tool)}${where}</span></div>
+    </div>`;
+    })
+    .join('');
+  return `<div class="sec-head"><b>Your agents</b><button class="refresh" id="agents-refresh" aria-label="Look for your agents again" title="Look for your reachable agents now">↻</button></div>${rows}`;
 }
 
 function bcMode(m: string, label: string, sub: string): string {
@@ -1563,6 +1614,7 @@ function wire() {
   root.querySelector('#canvas')?.addEventListener('click', pickFiles);
   root.querySelector('#share-back')?.addEventListener('click', () => { state.view = 'home'; render(); });
   busyClick('#nearby-find', () => findNearby()); // a deep pass probes the whole subnet
+  busyClick('#agents-refresh', (e) => { e.stopPropagation(); return loadAgents(); });
   busyClick('#open-net-settings', async () => {
     try { await backend().OpenNetworkSettings(); } catch (e) { toast(String(e)); }
   });
