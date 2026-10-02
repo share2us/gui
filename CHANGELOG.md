@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261002055057] - 2026-10-02
+
 ### Changed
 - **The bundled command line is refreshed.** A fresh install now ships the
   current `s2u` release, so the command line is up to date from the first run
