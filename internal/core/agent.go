@@ -97,6 +97,24 @@ func (c *Client) SendToAgent(ctx context.Context, agentID, sessionID, filePath, 
 	return SendToAgentResult{RequestID: res.RequestID, Status: res.Status, Transport: res.Transport, Busy: res.Busy}, nil
 }
 
+// AgentStatus is the current state of a sent hop: its status and, once the agent
+// has run, its reply (Result). Empty Result until there is one.
+type AgentStatus struct {
+	RequestID string `json:"requestId"`
+	Status    string `json:"status"`
+	Result    string `json:"result"`
+}
+
+// AgentStatus polls one sent hop's state, so the app can show pending -> running
+// -> done/failed and the agent's reply.
+func (c *Client) AgentStatus(ctx context.Context, requestID string) (AgentStatus, error) {
+	st, err := c.api.AgentInjectStatus(ctx, strings.TrimSpace(requestID))
+	if err != nil {
+		return AgentStatus{}, err
+	}
+	return AgentStatus{RequestID: st.ID, Status: st.Status, Result: st.Result}, nil
+}
+
 // ensureSigningKey makes sure this device has a hop signing key and that the
 // server holds it, mirroring the CLI: the key is saved locally before it is
 // registered (the server treats it as write-once). Idempotent.

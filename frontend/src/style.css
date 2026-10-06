@@ -1821,7 +1821,11 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
    rather than merged into a single feed the way "Activity & nearby" was. */
 .sec-head + .sec-head,
 .item + .sec-head,
-.empty + .sec-head { margin-top: var(--s6); }
+.empty + .sec-head,
+/* The agents section wraps its rows in .agents-body, so the NEXT section's header
+   follows that wrapper rather than an .item/.empty; without this it loses the
+   inter-section gap and collides with the agents list. */
+.agents-body + .sec-head { margin-top: var(--s6); }
 .sec-head .meta { font-weight: 400; color: var(--text-3); font-size: var(--fs-xs); }
 
 /* Shai's coming-soon panel, anchored under its header launcher. */

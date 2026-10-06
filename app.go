@@ -1624,3 +1624,13 @@ func (a *App) SendToAgent(req SendToAgentRequest) (core.SendToAgentResult, error
 	}
 	return c.SendToAgent(a.ctx, req.AgentID, req.SessionID, req.FilePath, req.Prompt, req.Inbox)
 }
+
+// AgentStatus polls a sent hop's state so the UI can show pending -> running ->
+// done/failed and the agent's reply.
+func (a *App) AgentStatus(requestID string) (core.AgentStatus, error) {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return core.AgentStatus{}, err
+	}
+	return c.AgentStatus(a.ctx, requestID)
+}

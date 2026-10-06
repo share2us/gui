@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+- The "Your agents" view now follows a send through to the end: it shows waiting
+  for approval, then running, then done with the agent's reply (or why it did not
+  run).
+
+### Fixed
+- The section under "Your agents" no longer crowds the agent list.
+
 ## [20261006104047] - 2026-10-06
 
 ### Added
