@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261006115231] - 2026-10-06
+
 ### Changed
 - "Your agents": pick an agent from the list to open a dialog, then choose the
   file and send, instead of controls on every row.
