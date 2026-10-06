@@ -13,6 +13,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+- Send a file to one of your own agents. A new "Your agents" view lists your
+  reachable coding-agent sessions. Pick a file, add an optional prompt, and send
+  it to the agent's inbox or have it run. The file goes straight to that device
+  over the local network when it is reachable, otherwise through the relay, and
+  the app tells you which path it took.
+
 ## [20261006095421] - 2026-10-06
 
 ### Changed
