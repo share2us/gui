@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261006095421] - 2026-10-06
+
 ### Changed
 - The bundled command line is refreshed to the current `s2u` release. Sending a
   file to another of your own devices on the same local network now goes directly,
