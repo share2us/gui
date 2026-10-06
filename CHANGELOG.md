@@ -13,6 +13,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+- "Your agents" now shows each agent's id (and a copy button in the send dialog), so
+  you can match the id from `s2u agent join`.
+
 ## [20261006115231] - 2026-10-06
 
 ### Changed

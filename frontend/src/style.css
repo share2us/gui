@@ -2005,9 +2005,13 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 .agent-row-hint { display: block; margin-top: 2px; font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent-row-hint.err { color: var(--danger); }
 .agent-row-go { flex: 0 0 auto; color: var(--text-3); font-size: var(--fs-md); }
+.agent-row-id { display: block; margin-top: 2px; font-family: var(--font-mono-app); font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Send modal: file + prompt + result, in the shared .overlay card. */
 .agent-modal { max-width: 380px; }
-.agent-modal-meta { font-size: var(--fs-xs); color: var(--text-3); margin-bottom: 8px; }
+.agent-modal-meta { font-size: var(--fs-xs); color: var(--text-3); margin-bottom: 4px; }
+.agent-modal-id { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; min-width: 0; }
+.agent-modal-id code { font-size: var(--fs-xs); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-modal-id .agent-id-copy { flex: 0 0 auto; }
 .agent-modal .agent-result { min-height: 18px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; }
 .agent-send { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .agent-file {
