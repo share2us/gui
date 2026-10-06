@@ -13,6 +13,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+- The bundled command line is refreshed to the current `s2u` release. Sending a
+  file to another of your own devices on the same local network now goes directly,
+  device to device, instead of through the relay, with no pairing step first.
+
 ## [20261002055057] - 2026-10-02
 
 ### Changed
