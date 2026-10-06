@@ -13,6 +13,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+- "Your agents": pick an agent from the list to open a dialog, then choose the
+  file and send, instead of controls on every row.
+- "Recent" is now a collapsible section, so a long activity list no longer crowds
+  the feed.
+
 ## [20261006113359] - 2026-10-06
 
 ### Added

@@ -1825,8 +1825,29 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 /* The agents section wraps its rows in .agents-body, so the NEXT section's header
    follows that wrapper rather than an .item/.empty; without this it loses the
    inter-section gap and collides with the agents list. */
-.agents-body + .sec-head { margin-top: var(--s6); }
+.agents-body + .sec-head,
+/* The Recent dropdown is a <details>, not a .sec-head, so it needs the same
+   inter-section gap after whatever precedes it. */
+.item + .sec-collapse,
+.empty + .sec-collapse,
+.agents-body + .sec-collapse,
+.sec-head + .sec-collapse { margin-top: var(--s6); }
 .sec-head .meta { font-weight: 400; color: var(--text-3); font-size: var(--fs-xs); }
+
+/* Recent as a dropdown, so a long activity list never crowds the feed. Mirrors
+   the .opt-card collapse pattern. */
+.sec-collapse { border: 0; }
+.sec-summary {
+  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; user-select: none; list-style: none;
+  font-size: var(--fs-xs); color: var(--text-2);
+}
+.sec-summary::-webkit-details-marker { display: none; }
+.sec-summary b { color: var(--text-1); font-weight: 600; font-size: var(--fs-sm); }
+.sec-caret { font-size: var(--fs-xs); color: var(--text-3); transition: transform var(--dur-fast); }
+.sec-collapse[open] .sec-summary .sec-caret { transform: rotate(90deg); }
+.sec-count { color: var(--text-3); font-size: var(--fs-xs); margin-left: auto; }
+.sec-collapse-body { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 
 /* Shai's coming-soon panel, anchored under its header launcher. */
 /* The update panel reuses the positioned Shai panel so it overlays instead of
@@ -1964,16 +1985,30 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
    coding-agent sessions. Heights are reserved so filling in results never shifts
    the feed. */
 .agents-body { min-height: 44px; }
+/* The agent row is a clickable button: selecting it opens the send modal. */
 .agent-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left; font: inherit; color: var(--text-1);
   padding: var(--s4, 10px) var(--s5, 12px);
   border: 1px solid var(--border);
   background: var(--bg-2);
   border-radius: var(--r-md);
   margin-bottom: var(--s3, 8px);
+  cursor: pointer;
+  transition: border-color var(--dur-fast);
 }
-.agent-row.is-off { opacity: .55; }
-.agent-head .n b { color: var(--text-1); font-weight: 600; }
-.agent-head .n small { color: var(--text-3); margin-left: 6px; font-size: var(--fs-xs); }
+.agent-row:hover:not(:disabled) { border-color: var(--accent); }
+.agent-row:disabled, .agent-row.is-off { opacity: .55; cursor: default; }
+.agent-row-main { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.agent-row-top b { color: var(--text-1); font-weight: 600; }
+.agent-row-top small { color: var(--text-3); margin-left: 6px; font-size: var(--fs-xs); }
+.agent-row-hint { display: block; margin-top: 2px; font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-row-hint.err { color: var(--danger); }
+.agent-row-go { flex: 0 0 auto; color: var(--text-3); font-size: var(--fs-md); }
+/* Send modal: file + prompt + result, in the shared .overlay card. */
+.agent-modal { max-width: 380px; }
+.agent-modal-meta { font-size: var(--fs-xs); color: var(--text-3); margin-bottom: 8px; }
+.agent-modal .agent-result { min-height: 18px; max-height: 120px; overflow-y: auto; white-space: pre-wrap; }
 .agent-send { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .agent-file {
   flex: 1 1 auto; min-width: 0;
