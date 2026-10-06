@@ -1276,6 +1276,11 @@ select:focus {
   gap: 4px;
   padding-right: 2px;
 }
+/* Keep every section at its natural height so the feed SCROLLS under height
+   pressure instead of the flex column compressing the sections until their
+   contents overflow their boxes and overlap the next one (Recent overlapping at
+   small window sizes). Same rule .modal-body relies on. */
+.feed-scroll > * { flex: 0 0 auto; }
 
 /* One-line feed item: icon · line (grows) · actions. Fixed row height so the
    list never reflows as items load. */
@@ -2031,6 +2036,17 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 .agent-result { min-height: 16px; margin-top: 6px; font-size: var(--fs-xs); color: var(--text-2); }
 .agent-result.ok { color: var(--success); }
 .agent-result.err { color: var(--danger); }
+/* Share flow "An agent" destination: a selectable agent list. */
+.agent-pick-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.agent-pick-list { display: flex; flex-direction: column; gap: 6px; }
+.agent-pick-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg-1); border-radius: var(--r-md); cursor: pointer; }
+.agent-pick-row:hover:not(:disabled) { border-color: var(--accent); }
+.agent-pick-row.sel { border-color: var(--accent); background: var(--bg-2); }
+.agent-pick-row:disabled, .agent-pick-row.is-off { opacity: .55; cursor: default; }
+.agent-pick-main { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.agent-pick-top b { color: var(--text-1); font-weight: 600; }
+.agent-pick-top small { color: var(--text-3); margin-left: 6px; font-size: var(--fs-xs); }
+.agent-pick-go { flex: 0 0 auto; color: var(--text-3); font-size: var(--fs-md); }
 .btn-mini.ghost { background: transparent; color: var(--text-1); border: 1px solid var(--border-strong); }
 .btn-mini.ghost:hover { background: var(--bg-hover); border-color: var(--accent); }
 .btn-mini:disabled { opacity: .5; cursor: default; }

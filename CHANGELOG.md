@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+- Send a file to one of your agents from the Share page: "Share a file" now has an
+  "An agent" destination (pick an agent, optional prompt, send to its inbox or run).
+  The separate home-screen "Your agents" list is gone.
+
+### Fixed
+- The activity feed no longer overlaps itself in a small window; it scrolls.
+
 ## [20261006134904] - 2026-10-06
 
 ### Added

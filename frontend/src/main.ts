@@ -141,7 +141,7 @@ interface AppBackend {
 const backend = (): AppBackend => (window as any).go.main.App;
 
 type View = 'home' | 'share' | 'broadcast';
-type Dest = 'nearby' | 'broadcast' | 'mydevice' | 'public' | 'private' | 'only-me';
+type Dest = 'nearby' | 'broadcast' | 'mydevice' | 'agent' | 'public' | 'private' | 'only-me';
 
 const state = {
   view: 'home' as View,
@@ -199,7 +199,7 @@ const state = {
   agentsError: '' as string,
   agentsLoaded: false as boolean, // loaded once; an empty list is a valid answer, so do not refetch on every render
   agentSend: {} as Record<string, AgentSendUI>, // per-agent picked file + prompt + result, keyed by agent id (or session id)
-  agentModalKey: '' as string, // which agent's send modal is open ('' = none)
+  pickedAgent: '' as string, // which agent is selected in the Share flow's agent destination
   recentOpen: (localStorage.getItem('s2u-recent-open') === '1') as boolean, // Recent dropdown; default collapsed
   pickedCloud: [] as { sessionId: string; publicKey: string; name: string; lanFingerprint: string }[],
   // A device send that is about to be uploaded, waiting on the user to accept the
@@ -393,7 +393,7 @@ function renderHome(): void {
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
-      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionAgents()}${sectionIncoming()}${sectionRecent()}`}</div>
+      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
       ${settingsBlock()}
     </div>
     ${cloudAskSlot()}
@@ -404,7 +404,6 @@ function renderHome(): void {
     ${state.confirmDrop ? dropConfirmOverlay(state.confirmDrop) : ''}
     ${state.renamePeer ? renamePeerOverlay(state.renamePeer) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
-    ${state.agentModalKey ? agentModalOverlay(state.agentModalKey) : ''}
     ${shaiPanel()}
     ${statusStrip()}
     ${buildStrip()}
@@ -684,6 +683,7 @@ function destPicker(loggedIn: boolean): string {
     return (
       opt('nearby', 'A device on this network', guest, nearbyBody) +
       opt('mydevice', 'My device, anywhere', loggedIn ? '' : need, myDeviceBody) +
+      opt('agent', 'An agent', loggedIn ? '' : need, agentDestBody()) +
       opt('broadcast', 'Everyone nearby', guest, bcBody)
     );
   }
@@ -827,6 +827,20 @@ async function sendToAgent(key: string, inbox: boolean): Promise<void> {
   } finally {
     ui.busy = false; render();
   }
+}
+
+// sendShareToAgent sends the Share flow's picked file to the selected agent. The
+// file is state.paths[0] (one file per agent send); a typed prompt means "run it",
+// no prompt means "drop it in the inbox". Reuses sendToAgent so the send + status
+// polling + result line behave exactly as elsewhere.
+async function sendShareToAgent(): Promise<void> {
+  const key = state.pickedAgent;
+  if (!key || !state.paths.length) return;
+  const ui = agentSendUI(key);
+  ui.filePath = state.paths[0];
+  ui.fileName = baseName(state.paths[0]);
+  const inbox = !ui.prompt.trim();
+  await sendToAgent(key, inbox);
 }
 
 // pollAgentStatus follows a sent hop until it reaches a terminal state, updating
@@ -1186,79 +1200,48 @@ function expiryRow(): string { return `<label class="fld">Expires<select id="exp
 function passwordRow(): string { return `<label class="fld">Password <span class="hint">optional</span><input id="password" type="password" placeholder="leave blank for none" autocomplete="off" /></label>`; }
 function checkRow(id: string, label: string): string { return `<label class="setting-row"><input type="checkbox" id="${id}" /><span class="setting-label">${label}</span></label>`; }
 
-// sectionAgents lists the account's own coding-agent sessions and lets the user
-// send a file (and an optional prompt) to one, directly over the LAN when the
-// agent's device is reachable, otherwise over the relay. Shown only when signed
-// in; an agent appears here only while its daemon is advertising it.
-function sectionAgents(): string {
+// agentDestBody is the Share flow's "An agent" destination: the account's agents
+// as a selectable list (the file to send is the one already picked in the Share
+// view). Loading/empty/error states, so the card never reflows as the list lands.
+function agentDestBody(): string {
   if (!state.status?.loggedIn) return '';
-  const head = `<div class="sec-head"><b>Your agents</b><button class="refresh" id="agents-refresh" aria-label="Look for your agents again" title="Look for your coding-agent sessions again."${state.agentsLoading ? ' disabled' : ''}>↻</button></div>`;
-  let body: string;
+  let list: string;
   if (state.agentsError) {
-    body = `<div class="empty">${escapeHtml(state.agentsError)}</div>`;
+    list = `<div class="hint">${escapeHtml(state.agentsError)}</div>`;
   } else if (!state.agentsLoaded && state.agentsLoading) {
-    body = `<div class="empty">Looking for your agents…</div>`;
+    list = `<div class="hint" style="min-height:38px">Looking for your agents…</div>`;
   } else if (!state.agents.length) {
-    body = `<div class="empty">No agents yet. Bind a Claude or Codex session with <b>s2u agent bind</b> on any of your devices and it appears here.</div>`;
+    list = `<div class="hint">No agents yet. Bind a Claude or Codex session with <b>s2u agent bind</b> on any of your devices.</div>`;
   } else {
-    body = state.agents.map(agentRow).join('');
+    list = state.agents.map(agentPickRow).join('');
   }
-  return `${head}<div class="agents-body">${body}</div>`;
+  const refresh = `<button class="refresh" id="agents-refresh" aria-label="Look for your agents again" title="Look for your coding-agent sessions again."${state.agentsLoading ? ' disabled' : ''}>↻</button>`;
+  const head = `<div class="agent-pick-head"><span style="font-size:12px;color:var(--text-2)">Send this file to one of your agents</span>${refresh}</div>`;
+  const key = state.pickedAgent;
+  const picked = key ? state.agents.find((a) => (a.agentId || a.sessionId) === key) : undefined;
+  const ui = key ? agentSendUI(key) : undefined;
+  const promptRow = picked
+    ? `<input class="agent-prompt" data-agent="${escapeHtml(key)}" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Optional prompt (runs it in the session)" value="${escapeHtml(ui!.prompt)}"${ui!.busy ? ' disabled' : ''} />`
+    : '';
+  const resultRow = ui && (ui.result || ui.error)
+    ? `<div class="agent-result ${ui.error ? 'err' : 'ok'}">${escapeHtml(ui.error || ui.result)}</div>`
+    : '';
+  return `${head}<div class="agent-pick-list">${list}</div>${promptRow}${resultRow}`;
 }
 
-// A compact, selectable agent row. Clicking it (when online) opens the send
-// modal for that agent; the file, prompt and send live there, not inline.
-function agentRow(a: AgentSession): string {
+// agentPickRow is one selectable agent in the Share flow: name, muted agt_ id (so
+// it can be matched against `s2u agent join`), and tool/device/status. Offline
+// agents are shown but not selectable.
+function agentPickRow(a: AgentSession): string {
   const key = a.agentId || a.sessionId;
   const offline = a.status === 'offline';
+  const sel = state.pickedAgent === key && !offline;
   const who = a.name || a.deviceName || a.tool || 'agent';
   const meta = [a.tool, a.deviceName, a.status].filter(Boolean).map(escapeHtml).join(' · ');
-  // A one-line echo of the last send to this agent, so its state is visible after
-  // the modal is closed (truncated; the full result shows inside the modal).
-  const ui = state.agentSend[key];
-  const hint = ui && (ui.error || ui.result)
-    ? `<span class="agent-row-hint${ui.error ? ' err' : ''}">${escapeHtml(ui.error || ui.result)}</span>`
-    : '';
-  return `<button class="agent-row${offline ? ' is-off' : ''}" data-agent="${escapeHtml(key)}"${offline ? ' disabled' : ''} title="${offline ? 'This agent is offline' : 'Send a file to this agent'}">
-    <span class="agent-row-main"><span class="agent-row-top"><b>${escapeHtml(who)}</b> <small>${meta}</small></span><small class="agent-row-id">${escapeHtml(key)}</small>${hint}</span>
-    <span class="agent-row-go" aria-hidden="true">›</span>
+  return `<button class="agent-pick-row${sel ? ' sel' : ''}${offline ? ' is-off' : ''}" data-agent="${escapeHtml(key)}"${offline ? ' disabled' : ''} title="${offline ? 'This agent is offline' : 'Select this agent'}">
+    <span class="agent-pick-main"><span class="agent-pick-top"><b>${escapeHtml(who)}</b> <small>${meta}</small></span><small class="agent-row-id">${escapeHtml(key)}</small></span>
+    <span class="agent-pick-go" aria-hidden="true">${sel ? '✓' : '→'}</span>
   </button>`;
-}
-
-// The send modal for one agent: choose a file, an optional prompt, and send to the
-// inbox or to run. Reuses the per-agent send state, so reopening shows the current
-// file/prompt/result; polling keeps the result line live while it is open.
-function agentModalOverlay(key: string): string {
-  const a = state.agents.find((x) => (x.agentId || x.sessionId) === key);
-  if (!a) return '';
-  const ui = agentSendUI(key);
-  const offline = a.status === 'offline';
-  const who = a.name || a.deviceName || a.tool || 'agent';
-  const meta = [a.tool, a.deviceName, a.status].filter(Boolean).map(escapeHtml).join(' · ');
-  const fileLabel = ui.fileName ? escapeHtml(ui.fileName) : 'No file chosen';
-  const canInbox = !offline && !ui.busy && !!ui.filePath;
-  const canRun = !offline && !ui.busy && (!!ui.filePath || !!ui.prompt.trim());
-  const resultLine = ui.error
-    ? `<div class="agent-result err">${escapeHtml(ui.error)}</div>`
-    : `<div class="agent-result ok">${escapeHtml(ui.result)}</div>`;
-  return `<div class="overlay agent-overlay"><div class="overlay-card agent-modal">
-    <div class="overlay-title">Send to ${escapeHtml(who)}</div>
-    <div class="overlay-body">
-      <div class="agent-modal-meta">${meta}</div>
-      <div class="agent-modal-id"><code>${escapeHtml(a.agentId || a.sessionId)}</code><button type="button" class="btn-mini ghost agent-id-copy" data-id="${escapeHtml(a.agentId || a.sessionId)}" title="Copy agent id">Copy id</button></div>
-      <div class="agent-send">
-        <button class="btn-mini ghost agent-pick" data-agent="${escapeHtml(key)}"${offline || ui.busy ? ' disabled' : ''}>Choose file</button>
-        <span class="agent-file" title="${fileLabel}">${fileLabel}</span>
-      </div>
-      <input class="agent-prompt" data-agent="${escapeHtml(key)}" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Optional prompt" value="${escapeHtml(ui.prompt)}"${offline || ui.busy ? ' disabled' : ''} />
-      ${resultLine}
-    </div>
-    <div class="overlay-actions">
-      <button class="btn-hdr" id="agent-modal-close">Close</button>
-      <button class="btn-mini ghost agent-send-inbox" data-agent="${escapeHtml(key)}"${canInbox ? '' : ' disabled'}>Send to inbox</button>
-      <button class="btn-accept agent-send-run" data-agent="${escapeHtml(key)}"${canRun ? '' : ' disabled'}>Send and run</button>
-    </div>
-  </div></div>`;
 }
 
 // accountDevicesBlock lists the machines signed in to this account, and whether
@@ -1366,6 +1349,10 @@ function primaryLabel(): string {
     // mechanism and hide the meaning.
     return n ? `Upload ${files} privately` : 'Upload privately';
   }
+  if (state.dest === 'agent') {
+    const ui = state.pickedAgent ? state.agentSend[state.pickedAgent] : undefined;
+    return ui && ui.prompt.trim() ? 'Send and run' : 'Send to inbox';
+  }
   return n ? `Create link for ${files}` : 'Create link';
 }
 
@@ -1389,6 +1376,9 @@ function footerReason(): string {
   if (state.dest === 'nearby' && !state.picked && !state.netDest.trim()) return 'Pick a device above, or enter its address.';
   if (state.dest === 'mydevice' && !state.status?.loggedIn) return 'Login to send to your own devices.';
   if (state.dest === 'mydevice' && state.pickedCloud.length === 0) return 'Pick one or more of your devices above.';
+  if (state.dest === 'agent' && !state.status?.loggedIn) return 'Login to send to an agent.';
+  if (state.dest === 'agent' && state.paths.length > 1) return 'Sending to an agent takes one file. Remove the others, or send them to a device.';
+  if (state.dest === 'agent' && !state.pickedAgent) return 'Pick an agent above.';
   // Broadcast offers ONE file for others to pull. Silently sending only the first
   // of several is the fault this replaces; say so and point at the path that does
   // handle several.
@@ -1400,6 +1390,7 @@ function footerReason(): string {
 async function onPrimary() {
   if (state.dest === 'broadcast') return startBroadcast();
   if (state.dest === 'mydevice') return sendToCloudDevice();
+  if (state.dest === 'agent') return sendShareToAgent();
   if (state.dest === 'nearby') {
     const typed = (root.querySelector<HTMLInputElement>('#net-dest')?.value || '').trim();
     const dest = typed || state.picked?.dest || '';
@@ -2022,33 +2013,13 @@ function wire() {
     state.settingsOpen = (e.currentTarget as HTMLDetailsElement).open;
   });
   busyClick('#devices-refresh', (e) => { e.stopPropagation(); return loadCloudDevices(); });
-  // Your agents: load once when signed in (an empty list is a valid answer, so
-  // agentsLoaded guards against refetching every render), and send controls.
-  if (state.view === 'home' && state.status?.loggedIn && !state.agentsLoaded && !state.agentsLoading) void loadAgents();
+  // Agents (Share flow, "An agent" destination): load lazily when that destination
+  // is open; select one; keep the typed prompt in state without re-rendering (so
+  // the input never loses focus), restored from state on the next render.
+  if (state.view === 'share' && state.dest === 'agent' && state.status?.loggedIn && !state.agentsLoaded && !state.agentsLoading) void loadAgents();
   busyClick('#agents-refresh', (e) => { e.stopPropagation(); return loadAgents(); });
-  busyClick('.agent-pick', async (e) => {
-    const key = (e.currentTarget as HTMLElement).dataset.agent || '';
-    const paths = await backend().PickFiles();
-    if (paths && paths.length) {
-      const ui = agentSendUI(key);
-      ui.filePath = paths[0];
-      ui.fileName = baseName(paths[0]);
-      ui.result = '';
-      ui.error = '';
-      render();
-    }
-  });
-  // Update the prompt in state WITHOUT re-rendering, so typing never loses focus;
-  // the value is restored from state on the next render.
+  on('.agent-pick-row', 'click', (e) => { const key = (e.currentTarget as HTMLElement).dataset.agent || ''; if (key) { state.pickedAgent = key; render(); } });
   on('.agent-prompt', 'input', (e) => { const el = e.currentTarget as HTMLInputElement; agentSendUI(el.dataset.agent || '').prompt = el.value; });
-  busyClick('.agent-send-inbox', (e) => sendToAgent((e.currentTarget as HTMLElement).dataset.agent || '', true));
-  busyClick('.agent-send-run', (e) => sendToAgent((e.currentTarget as HTMLElement).dataset.agent || '', false));
-  // Selecting an agent opens its send modal; offline rows are disabled buttons.
-  on('.agent-row', 'click', (e) => { const key = (e.currentTarget as HTMLElement).dataset.agent || ''; if (key) { state.agentModalKey = key; render(); } });
-  on('#agent-modal-close', 'click', () => { state.agentModalKey = ''; render(); });
-  // Click outside the card (on the backdrop) closes it, like a dialog.
-  on('.agent-overlay', 'click', (e) => { if (e.target === e.currentTarget) { state.agentModalKey = ''; render(); } });
-  on('.agent-id-copy', 'click', (e) => { e.stopPropagation(); copy((e.currentTarget as HTMLElement).dataset.id || ''); });
   // Recent is a dropdown: mirror the native toggle into state and remember it.
   root.querySelector<HTMLDetailsElement>('details.sec-collapse')?.addEventListener('toggle', (e) => {
     state.recentOpen = (e.currentTarget as HTMLDetailsElement).open;
@@ -2157,7 +2128,6 @@ function setupListeners() {
     if (state.renamePeer) { state.renamePeer = null; render(); return; }
     if (state.confirmDrop) { state.confirmDrop = null; render(); return; }
     if (state.shareResult) { state.shareResult = null; render(); return; }
-    if (state.agentModalKey) { state.agentModalKey = ''; render(); return; }
     if (state.dl) { state.dl = null; render(); return; }
     // Escape must not be the gesture that spends quota: dismissing this is a
     // decision NOT to upload.
