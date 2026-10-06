@@ -79,6 +79,9 @@ type AgentSession = { agentId: string; sessionId: string; deviceId: string; devi
 type SendToAgentResult = { requestId: string; status: string; transport: string; busy: boolean };
 type SendToAgentRequest = { agentId: string; sessionId: string; filePath: string; prompt: string; inbox: boolean };
 type AgentStatus = { requestId: string; status: string; result: string };
+// An incoming agent hop awaiting this account's approval. createdAt is an ISO
+// string from the API; the prompt stays sealed until it is delivered.
+type PendingAgentRequest = { id: string; senderDeviceId: string; senderName: string; tool: string; hasFile: boolean; createdAt: string };
 // Per-agent send controls, held in state so a re-render never loses a typed
 // prompt or a picked file. requestId tracks the last send so its status can be polled.
 type AgentSendUI = { filePath: string; fileName: string; prompt: string; busy: boolean; result: string; error: string; requestId?: string };
@@ -92,6 +95,9 @@ interface AppBackend {
   ListAgents(): Promise<AgentSession[]>;
   SendToAgent(req: SendToAgentRequest): Promise<SendToAgentResult>;
   AgentStatus(requestId: string): Promise<AgentStatus>;
+  ListPendingRequests(): Promise<PendingAgentRequest[]>;
+  ApproveAgentRequest(id: string): Promise<void>;
+  AllowAgentSender(senderDeviceId: string): Promise<void>;
   BeginLogin(): Promise<LoginInfo>;
   CompleteLogin(): Promise<Status>;
   SetAutostart(on: boolean): Promise<void>;
@@ -198,6 +204,9 @@ const state = {
   agentsLoading: false as boolean,
   agentsError: '' as string,
   agentsLoaded: false as boolean, // loaded once; an empty list is a valid answer, so do not refetch on every render
+  pendingRequests: [] as PendingAgentRequest[], // incoming agent hops awaiting this account's approval
+  pendingLoading: false as boolean,
+  pendingError: '' as string, // inline, under the section, so an approve failure does not vanish as a toast
   agentSend: {} as Record<string, AgentSendUI>, // per-agent picked file + prompt + result, keyed by agent id (or session id)
   pickedAgent: '' as string, // which agent is selected in the Share flow's agent destination
   recentOpen: (localStorage.getItem('s2u-recent-open') === '1') as boolean, // Recent dropdown; default collapsed
@@ -254,6 +263,8 @@ async function boot() {
       if (state.view === 'home') render();
     });
     startScanTimer();
+    void refreshPending();
+    startPendingTimer();
   } catch (e) {
     root.innerHTML = `<div class="error-box">Could not start: ${escapeHtml(String(e))}</div>`;
   }
@@ -393,7 +404,7 @@ function renderHome(): void {
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
-      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
+      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionAgentRequests()}${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
       ${settingsBlock()}
     </div>
     ${cloudAskSlot()}
@@ -441,6 +452,36 @@ function sectionNearby(): string {
 
 // Only rendered when something is waiting: an empty section would be a permanent
 // reminder of nothing.
+// Incoming agent hops waiting on this account's say-so. Approval is account-wide,
+// not tied to the target device, so this list lets the user clear a request aimed
+// at any of their machines (including a headless one) from here. Renders nothing
+// until there is something to approve, so it never reserves empty space.
+function agentRequestRow(r: PendingAgentRequest): string {
+  const who = r.senderName?.trim() || (r.senderDeviceId ? r.senderDeviceId.slice(0, 10) : 'an unknown device');
+  const tool = r.tool?.trim() ? escapeHtml(r.tool) : 'agent';
+  const when = ago(Math.floor(Date.parse(r.createdAt) / 1000));
+  const meta = [tool, r.hasFile ? 'sends a file' : '', when].filter(Boolean).map(escapeHtml).join(' · ');
+  return `<div class="item agent-req" data-id="${escapeHtml(r.id)}">
+    <div class="ico">🤝</div>
+    <div class="line"><b>${escapeHtml(who)}</b> <span class="meta">· ${meta}</span></div>
+    <div class="acts">
+      <button class="btn-mini approve-agent" data-id="${escapeHtml(r.id)}">Approve</button>
+      <button class="btn-mini allow-agent" data-sender="${escapeHtml(r.senderDeviceId)}" style="background:transparent;color:var(--text-2)">Always allow</button>
+    </div>
+  </div>`;
+}
+
+function sectionAgentRequests(): string {
+  const err = state.pendingError
+    ? `<div class="warn-line" style="color:var(--danger)">${escapeHtml(state.pendingError)}</div>`
+    : '';
+  if (!state.pendingRequests.length) {
+    return err ? `<div class="sec-head"><b>Agent requests</b></div>${err}` : '';
+  }
+  const rows = state.pendingRequests.map(agentRequestRow).join('');
+  return `<div class="sec-head"><b>Agent requests</b><span class="meta">waiting for your approval</span></div>${rows}${err}`;
+}
+
 function sectionIncoming(): string {
   // The offer to remember a folder must outlive the list. Saving the LAST
   // waiting file empties it, and an early return here made the offer disappear
@@ -1625,9 +1666,52 @@ async function discardIncoming(id: string) {
 }
 
 async function refreshIncoming() { try { state.incoming = (await backend().IncomingList()) || []; } catch { /* */ } }
+// Incoming agent requests, polled while home. Clears the inline error on a good
+// read; a bad one leaves the last list in place rather than blanking the section.
+async function refreshPending(show?: boolean) {
+  if (!state.status?.loggedIn) { state.pendingRequests = []; return; }
+  if (show) { state.pendingLoading = true; render(); }
+  try {
+    state.pendingRequests = (await backend().ListPendingRequests()) || [];
+    state.pendingError = '';
+  } catch (e) {
+    state.pendingError = String(e);
+  } finally {
+    state.pendingLoading = false;
+    if (state.view === 'home') render();
+  }
+}
+// Approve one request (no standing access). The target device's daemon delivers
+// it, so this works even when the request is aimed at another of the account's
+// machines. Refresh afterwards so the cleared request leaves the list.
+async function approveAgentRequest(id: string) {
+  if (!id) return;
+  try {
+    await backend().ApproveAgentRequest(id);
+    toast('Approved');
+    state.pendingError = '';
+  } catch (e) {
+    state.pendingError = String(e);
+  }
+  await refreshPending();
+}
+// Grant a sender standing access, so its future hops deliver without asking. This
+// also clears every currently pending request from that sender.
+async function allowAgentSender(senderDeviceId: string) {
+  if (!senderDeviceId) return;
+  try {
+    await backend().AllowAgentSender(senderDeviceId);
+    toast('This sender can now reach your agents');
+    state.pendingError = '';
+  } catch (e) {
+    state.pendingError = String(e);
+  }
+  await refreshPending();
+}
 async function refreshActivity() { try { state.activity = (await backend().ActivityLog()) || []; } catch { /* */ } }
 async function loadTrusted() { try { state.trusted = (await backend().ListTrusted()) || []; render(); } catch { /* */ } }
 let scanTimer = 0;
+let pendingTimer = 0;
 // deep = sweep the whole subnet. That is what pressing refresh means; the timer
 // asks for the cheap pass, which re-probes only devices already seen. A desktop
 // app that connected to every address on the network once a minute would look
@@ -1673,6 +1757,16 @@ function startScanTimer() {
   const sec = state.scanInterval;
   if (!sec || sec <= 0) return;
   scanTimer = window.setInterval(() => { if (state.view === 'home') findNearby(true, false); }, sec * 1000);
+}
+
+// One standing poll for incoming agent requests, started once. Guarded against
+// stacking the way startScanTimer is; it only fetches while home and logged in,
+// so a backgrounded or signed-out window stays quiet.
+function startPendingTimer() {
+  if (pendingTimer) { clearInterval(pendingTimer); pendingTimer = 0; }
+  pendingTimer = window.setInterval(() => {
+    if (state.view === 'home' && state.status?.loggedIn) void refreshPending();
+  }, 12000);
 }
 async function checkForUpdate() { if (state.storeManaged) return; try { const info = await backend().CheckUpdate(); if (info?.available) { state.update = info; render(); } } catch { /* */ } }
 async function checkClipboard() {
@@ -1935,6 +2029,18 @@ function wire() {
     el.addEventListener('click', (e) => {
       e.stopPropagation(); // the row handles clicks too; don't run this twice
       void busyWhile(el, saveIncoming(el.dataset.id || ''));
+    }),
+  );
+  root.querySelectorAll<HTMLElement>('.approve-agent').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void busyWhile(el, approveAgentRequest(el.dataset.id || ''));
+    }),
+  );
+  root.querySelectorAll<HTMLElement>('.allow-agent').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void busyWhile(el, allowAgentSender(el.dataset.sender || ''));
     }),
   );
   root.querySelectorAll<HTMLElement>('.rename-peer').forEach((el) =>

@@ -13,6 +13,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+- See and approve incoming agent requests. When another device sends work to one
+  of your agents, an "Agent requests" panel appears at the top with Approve and
+  Always allow. Approving here also clears a request aimed at a headless device.
+
 ## [20261006140621] - 2026-10-06
 
 ### Changed
