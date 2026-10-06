@@ -74,6 +74,13 @@ type DownloadResult = { name: string; fingerprint: string; from: string; trusted
 // than the local network. hasKey is false until that device has signed in and
 // registered an encryption key, and a device without one cannot be sent to.
 type CloudDevice = { sessionId: string; name: string; label: string; publicKey: string; hasKey: boolean; current: boolean; lanFingerprint: string };
+// One of the account's own coding-agent sessions, reachable to send a file to.
+type AgentSession = { agentId: string; sessionId: string; deviceId: string; deviceName: string; tool: string; name: string; status: string; lastSeen: string };
+type SendToAgentResult = { requestId: string; status: string; transport: string; busy: boolean };
+type SendToAgentRequest = { agentId: string; sessionId: string; filePath: string; prompt: string; inbox: boolean };
+// Per-agent send controls, held in state so a re-render never loses a typed
+// prompt or a picked file.
+type AgentSendUI = { filePath: string; fileName: string; prompt: string; busy: boolean; result: string; error: string };
 
 interface AppBackend {
   Status(): Promise<Status>;
@@ -81,6 +88,8 @@ interface AppBackend {
   PickFiles(): Promise<string[]>;
   Share(req: ShareRequest): Promise<ShareOutcome[]>;
   ListDevices(): Promise<CloudDevice[]>;
+  ListAgents(): Promise<AgentSession[]>;
+  SendToAgent(req: SendToAgentRequest): Promise<SendToAgentResult>;
   BeginLogin(): Promise<LoginInfo>;
   CompleteLogin(): Promise<Status>;
   SetAutostart(on: boolean): Promise<void>;
@@ -183,6 +192,11 @@ const state = {
   cloudDevices: [] as CloudDevice[], // the account's own devices, for an over-the-internet send
   cloudDevicesLoading: false as boolean,
   cloudDevicesError: '' as string,
+  agents: [] as AgentSession[], // the account's own coding-agent sessions
+  agentsLoading: false as boolean,
+  agentsError: '' as string,
+  agentsLoaded: false as boolean, // loaded once; an empty list is a valid answer, so do not refetch on every render
+  agentSend: {} as Record<string, AgentSendUI>, // per-agent picked file + prompt + result, keyed by agent id (or session id)
   pickedCloud: [] as { sessionId: string; publicKey: string; name: string; lanFingerprint: string }[],
   // A device send that is about to be uploaded, waiting on the user to accept the
   // cost. Null when there is nothing to ask.
@@ -375,7 +389,7 @@ function renderHome(): void {
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
-      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
+      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionNearby()}${sectionAgents()}${sectionIncoming()}${sectionRecent()}`}</div>
       ${settingsBlock()}
     </div>
     ${cloudAskSlot()}
@@ -753,6 +767,56 @@ async function loadCloudDevices(): Promise<void> {
   }
 }
 
+async function loadAgents(): Promise<void> {
+  if (!state.status?.loggedIn) return;
+  state.agentsLoading = true;
+  state.agentsError = '';
+  render();
+  try {
+    state.agents = (await backend().ListAgents()) || [];
+    state.agentsLoaded = true;
+  } catch (e) {
+    state.agentsError = String(e);
+  } finally {
+    state.agentsLoading = false;
+    render();
+  }
+}
+
+// agentSendUI returns the per-agent send controls, creating them on first use so
+// a typed prompt or a picked file survives the next render.
+function agentSendUI(key: string): AgentSendUI {
+  return (state.agentSend[key] ||= { filePath: '', fileName: '', prompt: '', busy: false, result: '', error: '' });
+}
+
+function baseName(p: string): string { return p.split(/[\\/]/).pop() || p; }
+
+// sendToAgent sends the picked file (and/or prompt) to one agent. inbox=true drops
+// the file without running a prompt; otherwise the agent runs the prompt.
+async function sendToAgent(key: string, inbox: boolean): Promise<void> {
+  const a = state.agents.find((x) => (x.agentId || x.sessionId) === key);
+  if (!a) return;
+  const ui = agentSendUI(key);
+  if (inbox && !ui.filePath) { ui.error = 'Choose a file to send to the inbox.'; ui.result = ''; render(); return; }
+  if (!inbox && !ui.filePath && !ui.prompt.trim()) { ui.error = 'Choose a file or type a prompt.'; ui.result = ''; render(); return; }
+  ui.busy = true; ui.result = ''; ui.error = ''; render();
+  try {
+    const res = await backend().SendToAgent({ agentId: a.agentId, sessionId: a.sessionId, filePath: ui.filePath, prompt: ui.prompt, inbox });
+    if (res.status === 'pending') {
+      ui.result = 'Waiting for approval on the target device.';
+    } else {
+      ui.result = res.transport ? `Sent via ${res.transport}.` : 'Sent.';
+      if (res.busy && !inbox) ui.result += ' That session is busy, so it runs once it is idle.';
+    }
+    // Clear the picked file and prompt so an accidental second click does not resend.
+    ui.filePath = ''; ui.fileName = ''; ui.prompt = '';
+  } catch (e) {
+    ui.error = String(e);
+  } finally {
+    ui.busy = false; render();
+  }
+}
+
 function bcMode(m: string, label: string, sub: string): string {
   return `<div class="mode ${state.bcAccess === m ? 'on' : ''}" data-bc-mode="${m}"
     role="radio" tabindex="0" aria-checked="${state.bcAccess === m ? 'true' : 'false'}"><span class="r"></span>${label} <small>— ${sub}</small></div>`;
@@ -1068,6 +1132,55 @@ function noteRow(): string { return `<label class="fld">Note <span class="hint">
 function expiryRow(): string { return `<label class="fld">Expires<select id="expires"><option value="">Default</option><option value="1h">1 hour</option><option value="1d">1 day</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="keep">Keep (no expiry)</option></select></label>`; }
 function passwordRow(): string { return `<label class="fld">Password <span class="hint">optional</span><input id="password" type="password" placeholder="leave blank for none" autocomplete="off" /></label>`; }
 function checkRow(id: string, label: string): string { return `<label class="setting-row"><input type="checkbox" id="${id}" /><span class="setting-label">${label}</span></label>`; }
+
+// sectionAgents lists the account's own coding-agent sessions and lets the user
+// send a file (and an optional prompt) to one, directly over the LAN when the
+// agent's device is reachable, otherwise over the relay. Shown only when signed
+// in; an agent appears here only while its daemon is advertising it.
+function sectionAgents(): string {
+  if (!state.status?.loggedIn) return '';
+  const head = `<div class="sec-head"><b>Your agents</b><button class="refresh" id="agents-refresh" aria-label="Look for your agents again" title="Look for your coding-agent sessions again."${state.agentsLoading ? ' disabled' : ''}>↻</button></div>`;
+  let body: string;
+  if (state.agentsError) {
+    body = `<div class="empty">${escapeHtml(state.agentsError)}</div>`;
+  } else if (!state.agentsLoaded && state.agentsLoading) {
+    body = `<div class="empty">Looking for your agents…</div>`;
+  } else if (!state.agents.length) {
+    body = `<div class="empty">No agents yet. Bind a Claude or Codex session with <b>s2u agent bind</b> on any of your devices and it appears here.</div>`;
+  } else {
+    body = state.agents.map(agentRow).join('');
+  }
+  return `${head}<div class="agents-body">${body}</div>`;
+}
+
+function agentRow(a: AgentSession): string {
+  const key = a.agentId || a.sessionId;
+  const ui = agentSendUI(key);
+  const offline = a.status === 'offline';
+  const who = a.name || a.deviceName || a.tool || 'agent';
+  const meta = [a.tool, a.deviceName, a.status].filter(Boolean).map(escapeHtml).join(' · ');
+  const fileLabel = ui.fileName ? escapeHtml(ui.fileName) : 'No file chosen';
+  const canInbox = !offline && !ui.busy && !!ui.filePath;
+  const canRun = !offline && !ui.busy && (!!ui.filePath || !!ui.prompt.trim());
+  const resultLine = ui.error
+    ? `<div class="agent-result err">${escapeHtml(ui.error)}</div>`
+    : ui.result
+      ? `<div class="agent-result ok">${escapeHtml(ui.result)}</div>`
+      : `<div class="agent-result"></div>`;
+  return `<div class="agent-row${offline ? ' is-off' : ''}" data-agent="${escapeHtml(key)}">
+    <div class="agent-head"><span class="n"><b>${escapeHtml(who)}</b> <small>${meta}</small></span></div>
+    <div class="agent-send">
+      <button class="btn-mini ghost agent-pick" data-agent="${escapeHtml(key)}"${offline || ui.busy ? ' disabled' : ''}>Choose file</button>
+      <span class="agent-file" title="${fileLabel}">${fileLabel}</span>
+    </div>
+    <input class="agent-prompt" data-agent="${escapeHtml(key)}" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Optional prompt" value="${escapeHtml(ui.prompt)}"${offline || ui.busy ? ' disabled' : ''} />
+    <div class="agent-actions">
+      <button class="btn-mini ghost agent-send-inbox" data-agent="${escapeHtml(key)}"${canInbox ? '' : ' disabled'}>Send to inbox</button>
+      <button class="btn-mini agent-send-run" data-agent="${escapeHtml(key)}"${canRun ? '' : ' disabled'}>Send and run</button>
+    </div>
+    ${resultLine}
+  </div>`;
+}
 
 // accountDevicesBlock lists the machines signed in to this account, and whether
 // each can actually receive a file.
@@ -1830,6 +1943,27 @@ function wire() {
     state.settingsOpen = (e.currentTarget as HTMLDetailsElement).open;
   });
   busyClick('#devices-refresh', (e) => { e.stopPropagation(); return loadCloudDevices(); });
+  // Your agents: load once when signed in (an empty list is a valid answer, so
+  // agentsLoaded guards against refetching every render), and send controls.
+  if (state.view === 'home' && state.status?.loggedIn && !state.agentsLoaded && !state.agentsLoading) void loadAgents();
+  busyClick('#agents-refresh', (e) => { e.stopPropagation(); return loadAgents(); });
+  busyClick('.agent-pick', async (e) => {
+    const key = (e.currentTarget as HTMLElement).dataset.agent || '';
+    const paths = await backend().PickFiles();
+    if (paths && paths.length) {
+      const ui = agentSendUI(key);
+      ui.filePath = paths[0];
+      ui.fileName = baseName(paths[0]);
+      ui.result = '';
+      ui.error = '';
+      render();
+    }
+  });
+  // Update the prompt in state WITHOUT re-rendering, so typing never loses focus;
+  // the value is restored from state on the next render.
+  on('.agent-prompt', 'input', (e) => { const el = e.currentTarget as HTMLInputElement; agentSendUI(el.dataset.agent || '').prompt = el.value; });
+  busyClick('.agent-send-inbox', (e) => sendToAgent((e.currentTarget as HTMLElement).dataset.agent || '', true));
+  busyClick('.agent-send-run', (e) => sendToAgent((e.currentTarget as HTMLElement).dataset.agent || '', false));
   on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
   on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');

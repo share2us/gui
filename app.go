@@ -1594,3 +1594,33 @@ func windowTitle(addrs []string) string {
 // actually change: a new DHCP lease, a different subnet, a VPN, a randomised MAC,
 // or the peer simply restarting (which regenerates its session certificate).
 func (a *App) PeerAlias(identity, name string) error { return alias.Set(identity, name) }
+
+// ListAgents lists the account's reachable coding-agent sessions, so the user can
+// send a file to one of their own agents from the desktop app.
+func (a *App) ListAgents() ([]core.AgentSession, error) {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return nil, err
+	}
+	return c.AgentSessions(a.ctx)
+}
+
+// SendToAgentRequest is the send-to-agent modal's submit payload.
+type SendToAgentRequest struct {
+	AgentID   string `json:"agentId"`
+	SessionID string `json:"sessionId"`
+	FilePath  string `json:"filePath"`
+	Prompt    string `json:"prompt"`
+	Inbox     bool   `json:"inbox"`
+}
+
+// SendToAgent sends a file (and/or prompt) to one of the account's agents. The
+// file goes directly over LAN/Tailscale when the agent's device is reachable on
+// the network, else over the relay; the result reports which path it took.
+func (a *App) SendToAgent(req SendToAgentRequest) (core.SendToAgentResult, error) {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return core.SendToAgentResult{}, err
+	}
+	return c.SendToAgent(a.ctx, req.AgentID, req.SessionID, req.FilePath, req.Prompt, req.Inbox)
+}

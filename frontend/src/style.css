@@ -1955,3 +1955,41 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
   box-shadow: inset 0 0 0 1px var(--accent-border);
   padding: 2px var(--s3);
 }
+
+/* Your agents: send a file (and optional prompt) to one of the account's own
+   coding-agent sessions. Heights are reserved so filling in results never shifts
+   the feed. */
+.agents-body { min-height: 44px; }
+.agent-row {
+  padding: var(--s4, 10px) var(--s5, 12px);
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  border-radius: var(--r-md);
+  margin-bottom: var(--s3, 8px);
+}
+.agent-row.is-off { opacity: .55; }
+.agent-head .n b { color: var(--text-1); font-weight: 600; }
+.agent-head .n small { color: var(--text-3); margin-left: 6px; font-size: var(--fs-xs); }
+.agent-send { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.agent-file {
+  flex: 1 1 auto; min-width: 0;
+  font-size: var(--fs-xs); color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-prompt {
+  width: 100%; box-sizing: border-box; margin-top: 8px;
+  padding: 7px 10px; font-size: var(--fs-sm);
+  color: var(--text-1); background: var(--bg-1);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.agent-prompt:focus { outline: none; border-color: var(--accent); }
+.agent-prompt:disabled { opacity: .6; }
+.agent-actions { display: flex; gap: 8px; margin-top: 8px; }
+.agent-result { min-height: 16px; margin-top: 6px; font-size: var(--fs-xs); color: var(--text-2); }
+.agent-result.ok { color: var(--success); }
+.agent-result.err { color: var(--danger); }
+.btn-mini.ghost { background: transparent; color: var(--text-1); border: 1px solid var(--border-strong); }
+.btn-mini.ghost:hover { background: var(--bg-hover); border-color: var(--accent); }
+.btn-mini:disabled { opacity: .5; cursor: default; }
+.btn-mini:disabled:hover { background: var(--accent); }
+.btn-mini.ghost:disabled:hover { background: transparent; border-color: var(--border-strong); }

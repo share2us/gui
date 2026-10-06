@@ -286,13 +286,17 @@ func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer, aliases m
 		// attacker-choosable. Where the same device also answered a probe with a
 		// signed card, that name is proven and this one is not, so the card wins.
 		card := cards[p.Fingerprint]
+		// Prefer the probe card's proven identity, but fall back to the mDNS "id"
+		// TXT (cli-core v0.52.0+) so a device seen only over mDNS still carries a
+		// stable identity it can be remembered and named by, instead of none.
+		ident := firstNonEmpty(card.IdentityFingerprint, p.IdentityFingerprint)
 		out = append(out, Peer{
 			Name:        firstNonEmpty(card.Name, p.Name),
-			Identity:    card.IdentityFingerprint,
+			Identity:    ident,
 			Addr:        p.Addr(),
 			Address:     p.Host,
 			Dest:        lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
-			Code:        lanshare.VerifyCode(firstNonEmpty(card.IdentityFingerprint, p.Fingerprint)),
+			Code:        lanshare.VerifyCode(firstNonEmpty(ident, p.Fingerprint)),
 			Mode:        p.Mode,
 			Fingerprint: p.Fingerprint,
 			IsBroadcast: p.IsBroadcast,
