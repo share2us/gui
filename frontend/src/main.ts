@@ -78,9 +78,10 @@ type CloudDevice = { sessionId: string; name: string; label: string; publicKey: 
 type AgentSession = { agentId: string; sessionId: string; deviceId: string; deviceName: string; tool: string; name: string; status: string; lastSeen: string };
 type SendToAgentResult = { requestId: string; status: string; transport: string; busy: boolean };
 type SendToAgentRequest = { agentId: string; sessionId: string; filePath: string; prompt: string; inbox: boolean };
+type AgentStatus = { requestId: string; status: string; result: string };
 // Per-agent send controls, held in state so a re-render never loses a typed
-// prompt or a picked file.
-type AgentSendUI = { filePath: string; fileName: string; prompt: string; busy: boolean; result: string; error: string };
+// prompt or a picked file. requestId tracks the last send so its status can be polled.
+type AgentSendUI = { filePath: string; fileName: string; prompt: string; busy: boolean; result: string; error: string; requestId?: string };
 
 interface AppBackend {
   Status(): Promise<Status>;
@@ -90,6 +91,7 @@ interface AppBackend {
   ListDevices(): Promise<CloudDevice[]>;
   ListAgents(): Promise<AgentSession[]>;
   SendToAgent(req: SendToAgentRequest): Promise<SendToAgentResult>;
+  AgentStatus(requestId: string): Promise<AgentStatus>;
   BeginLogin(): Promise<LoginInfo>;
   CompleteLogin(): Promise<Status>;
   SetAutostart(on: boolean): Promise<void>;
@@ -802,18 +804,61 @@ async function sendToAgent(key: string, inbox: boolean): Promise<void> {
   ui.busy = true; ui.result = ''; ui.error = ''; render();
   try {
     const res = await backend().SendToAgent({ agentId: a.agentId, sessionId: a.sessionId, filePath: ui.filePath, prompt: ui.prompt, inbox });
-    if (res.status === 'pending') {
-      ui.result = 'Waiting for approval on the target device.';
-    } else {
-      ui.result = res.transport ? `Sent via ${res.transport}.` : 'Sent.';
-      if (res.busy && !inbox) ui.result += ' That session is busy, so it runs once it is idle.';
-    }
+    const via = res.transport ? ` via ${res.transport}` : '';
+    ui.requestId = res.requestId || undefined;
+    ui.result = res.status === 'pending'
+      ? `Sent${via}. Waiting for approval on the target device…`
+      : `Sent${via}.`;
+    if (res.busy && !inbox) ui.result += ' The session is busy, so it runs once it is idle.';
     // Clear the picked file and prompt so an accidental second click does not resend.
     ui.filePath = ''; ui.fileName = ''; ui.prompt = '';
+    // Follow the hop to running -> done/failed and the agent's reply.
+    if (res.requestId) void pollAgentStatus(key, res.requestId, inbox, via);
   } catch (e) {
     ui.error = String(e);
   } finally {
     ui.busy = false; render();
+  }
+}
+
+// pollAgentStatus follows a sent hop until it reaches a terminal state, updating
+// the agent's result line in place (pending -> running -> done/failed + reply).
+// It stops if a newer send supersedes it (requestId changed) or after 10 minutes.
+async function pollAgentStatus(key: string, requestId: string, inbox: boolean, via: string): Promise<void> {
+  const terminal = new Set(['done', 'failed', 'declined', 'expired', 'error', 'cancelled', 'canceled']);
+  const label: Record<string, string> = {
+    pending: 'Waiting for approval on the target device…',
+    queued: 'Queued…',
+    waiting: 'Waiting for the session to be idle…',
+    running: 'Running…',
+  };
+  const started = Date.now();
+  while (Date.now() - started < 10 * 60 * 1000) {
+    await new Promise((r) => setTimeout(r, 3000));
+    let ui = state.agentSend[key];
+    if (!ui || ui.requestId !== requestId) return; // gone, or superseded by a newer send
+    let st: AgentStatus;
+    try {
+      st = await backend().AgentStatus(requestId);
+    } catch {
+      continue; // transient; keep following
+    }
+    ui = state.agentSend[key];
+    if (!ui || ui.requestId !== requestId) return;
+    const s = (st.status || '').toLowerCase();
+    if (terminal.has(s)) {
+      if (s === 'done') {
+        ui.result = st.result ? `Done. ${st.result}` : (inbox ? 'Delivered.' : 'Done.');
+        ui.error = '';
+      } else {
+        ui.error = st.result || `The agent did not run it (${s}).`;
+        ui.result = '';
+      }
+      render();
+      return;
+    }
+    ui.result = `Sent${via}. ${label[s] || 'Working…'}`;
+    render();
   }
 }
 
