@@ -199,6 +199,8 @@ const state = {
   agentsError: '' as string,
   agentsLoaded: false as boolean, // loaded once; an empty list is a valid answer, so do not refetch on every render
   agentSend: {} as Record<string, AgentSendUI>, // per-agent picked file + prompt + result, keyed by agent id (or session id)
+  agentModalKey: '' as string, // which agent's send modal is open ('' = none)
+  recentOpen: (localStorage.getItem('s2u-recent-open') === '1') as boolean, // Recent dropdown; default collapsed
   pickedCloud: [] as { sessionId: string; publicKey: string; name: string; lanFingerprint: string }[],
   // A device send that is about to be uploaded, waiting on the user to accept the
   // cost. Null when there is nothing to ask.
@@ -402,6 +404,7 @@ function renderHome(): void {
     ${state.confirmDrop ? dropConfirmOverlay(state.confirmDrop) : ''}
     ${state.renamePeer ? renamePeerOverlay(state.renamePeer) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
+    ${state.agentModalKey ? agentModalOverlay(state.agentModalKey) : ''}
     ${shaiPanel()}
     ${statusStrip()}
     ${buildStrip()}
@@ -490,7 +493,12 @@ function sectionRecent(): string {
   const more = all.length > 5
     ? `<div class="item log"><div class="line"><button class="strip-link" id="open-history">Show all in the portal ↗</button></div></div>`
     : '';
-  return `<div class="sec-head"><b>Recent</b></div>${rows}${more}`;
+  // A dropdown so a long activity list never crowds the feed below it. Collapsed
+  // by default; the choice is remembered. Matches the .opt-card collapse pattern.
+  return `<details class="sec-collapse"${state.recentOpen ? ' open' : ''}>
+    <summary class="sec-summary"><span class="sec-caret" aria-hidden="true">▸</span><b>Recent</b><span class="sec-count">${all.length}</span></summary>
+    <div class="sec-collapse-body">${rows}${more}</div>
+  </details>`;
 }
 
 
@@ -1198,8 +1206,31 @@ function sectionAgents(): string {
   return `${head}<div class="agents-body">${body}</div>`;
 }
 
+// A compact, selectable agent row. Clicking it (when online) opens the send
+// modal for that agent; the file, prompt and send live there, not inline.
 function agentRow(a: AgentSession): string {
   const key = a.agentId || a.sessionId;
+  const offline = a.status === 'offline';
+  const who = a.name || a.deviceName || a.tool || 'agent';
+  const meta = [a.tool, a.deviceName, a.status].filter(Boolean).map(escapeHtml).join(' · ');
+  // A one-line echo of the last send to this agent, so its state is visible after
+  // the modal is closed (truncated; the full result shows inside the modal).
+  const ui = state.agentSend[key];
+  const hint = ui && (ui.error || ui.result)
+    ? `<span class="agent-row-hint${ui.error ? ' err' : ''}">${escapeHtml(ui.error || ui.result)}</span>`
+    : '';
+  return `<button class="agent-row${offline ? ' is-off' : ''}" data-agent="${escapeHtml(key)}"${offline ? ' disabled' : ''} title="${offline ? 'This agent is offline' : 'Send a file to this agent'}">
+    <span class="agent-row-main"><span class="agent-row-top"><b>${escapeHtml(who)}</b> <small>${meta}</small></span>${hint}</span>
+    <span class="agent-row-go" aria-hidden="true">›</span>
+  </button>`;
+}
+
+// The send modal for one agent: choose a file, an optional prompt, and send to the
+// inbox or to run. Reuses the per-agent send state, so reopening shows the current
+// file/prompt/result; polling keeps the result line live while it is open.
+function agentModalOverlay(key: string): string {
+  const a = state.agents.find((x) => (x.agentId || x.sessionId) === key);
+  if (!a) return '';
   const ui = agentSendUI(key);
   const offline = a.status === 'offline';
   const who = a.name || a.deviceName || a.tool || 'agent';
@@ -1209,22 +1240,24 @@ function agentRow(a: AgentSession): string {
   const canRun = !offline && !ui.busy && (!!ui.filePath || !!ui.prompt.trim());
   const resultLine = ui.error
     ? `<div class="agent-result err">${escapeHtml(ui.error)}</div>`
-    : ui.result
-      ? `<div class="agent-result ok">${escapeHtml(ui.result)}</div>`
-      : `<div class="agent-result"></div>`;
-  return `<div class="agent-row${offline ? ' is-off' : ''}" data-agent="${escapeHtml(key)}">
-    <div class="agent-head"><span class="n"><b>${escapeHtml(who)}</b> <small>${meta}</small></span></div>
-    <div class="agent-send">
-      <button class="btn-mini ghost agent-pick" data-agent="${escapeHtml(key)}"${offline || ui.busy ? ' disabled' : ''}>Choose file</button>
-      <span class="agent-file" title="${fileLabel}">${fileLabel}</span>
+    : `<div class="agent-result ok">${escapeHtml(ui.result)}</div>`;
+  return `<div class="overlay agent-overlay"><div class="overlay-card agent-modal">
+    <div class="overlay-title">Send to ${escapeHtml(who)}</div>
+    <div class="overlay-body">
+      <div class="agent-modal-meta">${meta}</div>
+      <div class="agent-send">
+        <button class="btn-mini ghost agent-pick" data-agent="${escapeHtml(key)}"${offline || ui.busy ? ' disabled' : ''}>Choose file</button>
+        <span class="agent-file" title="${fileLabel}">${fileLabel}</span>
+      </div>
+      <input class="agent-prompt" data-agent="${escapeHtml(key)}" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Optional prompt" value="${escapeHtml(ui.prompt)}"${offline || ui.busy ? ' disabled' : ''} />
+      ${resultLine}
     </div>
-    <input class="agent-prompt" data-agent="${escapeHtml(key)}" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Optional prompt" value="${escapeHtml(ui.prompt)}"${offline || ui.busy ? ' disabled' : ''} />
-    <div class="agent-actions">
+    <div class="overlay-actions">
+      <button class="btn-hdr" id="agent-modal-close">Close</button>
       <button class="btn-mini ghost agent-send-inbox" data-agent="${escapeHtml(key)}"${canInbox ? '' : ' disabled'}>Send to inbox</button>
-      <button class="btn-mini agent-send-run" data-agent="${escapeHtml(key)}"${canRun ? '' : ' disabled'}>Send and run</button>
+      <button class="btn-accept agent-send-run" data-agent="${escapeHtml(key)}"${canRun ? '' : ' disabled'}>Send and run</button>
     </div>
-    ${resultLine}
-  </div>`;
+  </div></div>`;
 }
 
 // accountDevicesBlock lists the machines signed in to this account, and whether
@@ -2009,6 +2042,16 @@ function wire() {
   on('.agent-prompt', 'input', (e) => { const el = e.currentTarget as HTMLInputElement; agentSendUI(el.dataset.agent || '').prompt = el.value; });
   busyClick('.agent-send-inbox', (e) => sendToAgent((e.currentTarget as HTMLElement).dataset.agent || '', true));
   busyClick('.agent-send-run', (e) => sendToAgent((e.currentTarget as HTMLElement).dataset.agent || '', false));
+  // Selecting an agent opens its send modal; offline rows are disabled buttons.
+  on('.agent-row', 'click', (e) => { const key = (e.currentTarget as HTMLElement).dataset.agent || ''; if (key) { state.agentModalKey = key; render(); } });
+  on('#agent-modal-close', 'click', () => { state.agentModalKey = ''; render(); });
+  // Click outside the card (on the backdrop) closes it, like a dialog.
+  on('.agent-overlay', 'click', (e) => { if (e.target === e.currentTarget) { state.agentModalKey = ''; render(); } });
+  // Recent is a dropdown: mirror the native toggle into state and remember it.
+  root.querySelector<HTMLDetailsElement>('details.sec-collapse')?.addEventListener('toggle', (e) => {
+    state.recentOpen = (e.currentTarget as HTMLDetailsElement).open;
+    try { localStorage.setItem('s2u-recent-open', state.recentOpen ? '1' : '0'); } catch { /* storage may be unavailable */ }
+  });
   on('#shai-open', 'click', () => { state.shaiOpen = !state.shaiOpen; render(); });
   on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
@@ -2112,6 +2155,7 @@ function setupListeners() {
     if (state.renamePeer) { state.renamePeer = null; render(); return; }
     if (state.confirmDrop) { state.confirmDrop = null; render(); return; }
     if (state.shareResult) { state.shareResult = null; render(); return; }
+    if (state.agentModalKey) { state.agentModalKey = ''; render(); return; }
     if (state.dl) { state.dl = null; render(); return; }
     // Escape must not be the gesture that spends quota: dismissing this is a
     // decision NOT to upload.
