@@ -1220,7 +1220,7 @@ function agentRow(a: AgentSession): string {
     ? `<span class="agent-row-hint${ui.error ? ' err' : ''}">${escapeHtml(ui.error || ui.result)}</span>`
     : '';
   return `<button class="agent-row${offline ? ' is-off' : ''}" data-agent="${escapeHtml(key)}"${offline ? ' disabled' : ''} title="${offline ? 'This agent is offline' : 'Send a file to this agent'}">
-    <span class="agent-row-main"><span class="agent-row-top"><b>${escapeHtml(who)}</b> <small>${meta}</small></span>${hint}</span>
+    <span class="agent-row-main"><span class="agent-row-top"><b>${escapeHtml(who)}</b> <small>${meta}</small></span><small class="agent-row-id">${escapeHtml(key)}</small>${hint}</span>
     <span class="agent-row-go" aria-hidden="true">›</span>
   </button>`;
 }
@@ -1245,6 +1245,7 @@ function agentModalOverlay(key: string): string {
     <div class="overlay-title">Send to ${escapeHtml(who)}</div>
     <div class="overlay-body">
       <div class="agent-modal-meta">${meta}</div>
+      <div class="agent-modal-id"><code>${escapeHtml(a.agentId || a.sessionId)}</code><button type="button" class="btn-mini ghost agent-id-copy" data-id="${escapeHtml(a.agentId || a.sessionId)}" title="Copy agent id">Copy id</button></div>
       <div class="agent-send">
         <button class="btn-mini ghost agent-pick" data-agent="${escapeHtml(key)}"${offline || ui.busy ? ' disabled' : ''}>Choose file</button>
         <span class="agent-file" title="${fileLabel}">${fileLabel}</span>
@@ -2047,6 +2048,7 @@ function wire() {
   on('#agent-modal-close', 'click', () => { state.agentModalKey = ''; render(); });
   // Click outside the card (on the backdrop) closes it, like a dialog.
   on('.agent-overlay', 'click', (e) => { if (e.target === e.currentTarget) { state.agentModalKey = ''; render(); } });
+  on('.agent-id-copy', 'click', (e) => { e.stopPropagation(); copy((e.currentTarget as HTMLElement).dataset.id || ''); });
   // Recent is a dropdown: mirror the native toggle into state and remember it.
   root.querySelector<HTMLDetailsElement>('details.sec-collapse')?.addEventListener('toggle', (e) => {
     state.recentOpen = (e.currentTarget as HTMLDetailsElement).open;
