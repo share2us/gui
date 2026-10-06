@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261006140621] - 2026-10-06
+
 ### Changed
 - Send a file to one of your agents from the Share page: "Share a file" now has an
   "An agent" destination (pick an agent, optional prompt, send to its inbox or run).
