@@ -13,6 +13,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- The Windows installer can now update while the background receiver is running.
+  Before, it stopped with "s2u is running" and would not continue until you
+  restarted Windows, even though nothing was visible in the system tray; it now
+  stops the receiver itself before updating.
+
 ## [20261006142629] - 2026-10-06
 
 ### Added

@@ -71,6 +71,12 @@ ChangesEnvironment=yes
 ; Add/Remove Programs shows this next to the entry. It defaults to the
 ; uninstaller's icon, which is not the app's.
 UninstallDisplayIcon={app}\{#GuiExe}
+; PrepareToInstall (see [Code]) stops any running Share2Us processes before the
+; copy, so the Restart Manager finds nothing holding s2u.exe / share2us.exe and
+; never falls back to demanding a Windows restart. Do not let it try to relaunch
+; what it closed: the headless receiver cannot be restarted that way, and the app
+; is relaunched by the postinstall step / the receiver by autostart instead.
+RestartApplications=no
 
 [Types]
 Name: "full"; Description: "Everything (app + command-line)"
@@ -157,6 +163,49 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
   Flags: preservestringtype
 
 [Code]
+{ Stop any running Share2Us process before the install overwrites its files.
+
+  The old blocker: the background receiver is `s2u daemon run`, a HEADLESS
+  console process with no tray icon and no window. Inno's default Restart Manager
+  can close the GUI window, but it cannot shut a headless console process down,
+  so it left s2u.exe / share2us.exe locked and Setup demanded a Windows restart
+  before it would continue -- with nothing on screen to say what "s2u" even was
+  (owner, 2026-10-06: "says s2u is running but there's no s2u in the system tray,
+  won't proceed until I restart Windows").
+
+  We stop it ourselves, here, before any file is touched. Graceful first: the
+  installed CLI asks the daemon to stop over its control socket, which releases
+  any bound agent session cleanly and also catches a hand-started `daemon run`.
+  Then we force-kill whatever is left by image name. All best effort -- a failure
+  here must never block the install, so return codes are ignored. }
+procedure StopRunningShare2Us;
+var
+  ResultCode: Integer;
+  CliPath: string;
+begin
+  CliPath := ExpandConstant('{#CliDir}\{#CliExe}');
+  if not FileExists(CliPath) then
+    CliPath := ExpandConstant('{#CliDir}\share2us.exe');
+  if FileExists(CliPath) then
+    Exec(CliPath, 'daemon stop', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { Force-kill anything still up: the receiver/CLI (s2u.exe and its share2us.exe
+    twin, from any path) and the GUI (share2us-gui.exe). /T takes child processes
+    too. Setup.exe is named none of these, so it is never a target. }
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM s2u.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM share2us.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM {#GuiExe}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { Let Windows release the file handles before the copy begins. }
+  Sleep(800);
+end;
+
+{ The last event before the install proper -- Setup checks for files in use after
+  this, so by then nothing of ours is holding them. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopRunningShare2Us;
+  Result := '';
+end;
+
 // True when the install dir is not already on the user PATH (avoids duplicates).
 function NeedsAddPath(Param: string): Boolean;
 var
@@ -203,6 +252,10 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep <> usUninstall then
     exit;
+  { Same reason as install: a running headless receiver would otherwise lock
+    s2u.exe / share2us.exe and leave files behind. usUninstall fires before any
+    file is removed, so stopping here clears the hold first. }
+  StopRunningShare2Us;
   RemoveFromUserPath(ExpandConstant('{#CliDir}'));
   RemoveFromUserPath(ExpandConstant('{app}'));
 end;
