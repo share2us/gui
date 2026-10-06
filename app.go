@@ -1634,3 +1634,31 @@ func (a *App) AgentStatus(requestID string) (core.AgentStatus, error) {
 	}
 	return c.AgentStatus(a.ctx, requestID)
 }
+
+// ListPendingRequests lists incoming agent requests awaiting approval, so the
+// app can surface them (the receive side of agent sending).
+func (a *App) ListPendingRequests() ([]core.PendingAgentRequest, error) {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return nil, err
+	}
+	return c.PendingAgentRequests(a.ctx)
+}
+
+// ApproveAgentRequest approves one incoming request (no standing access).
+func (a *App) ApproveAgentRequest(id string) error {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return err
+	}
+	return c.ApproveAgentRequest(a.ctx, id)
+}
+
+// AllowAgentSender grants a sender device standing access for future hops.
+func (a *App) AllowAgentSender(senderDeviceID string) error {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return err
+	}
+	return c.AllowAgentSender(a.ctx, senderDeviceID)
+}

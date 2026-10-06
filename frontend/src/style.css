@@ -988,6 +988,21 @@ select:focus {
   background: var(--bg-2);
 }
 
+/* An agent request is a consent prompt, so it reads as one: the accent border the
+   warn rows use, and action buttons that keep their label even when the window is
+   narrow (they wrap under the line rather than crushing it). */
+.agent-req {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  flex-wrap: wrap;
+}
+.agent-req .line {
+  flex: 1 1 140px;
+}
+.agent-req .acts {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 /* The destination cards and broadcast modes are radio groups. They are divs, so
    the ring has to be asked for explicitly. */
 .dest-opt:focus-visible,

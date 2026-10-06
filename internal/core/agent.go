@@ -142,6 +142,53 @@ func (c *Client) ensureSigningKey(ctx context.Context) error {
 	return nil
 }
 
+// PendingAgentRequest is an incoming agent hop awaiting this account's approval.
+// The prompt stays sealed (shown only once delivered into the target session).
+type PendingAgentRequest struct {
+	ID             string `json:"id"`
+	SenderDeviceID string `json:"senderDeviceId"`
+	SenderName     string `json:"senderName"`
+	Tool           string `json:"tool"`
+	HasFile        bool   `json:"hasFile"`
+	CreatedAt      string `json:"createdAt"`
+}
+
+// PendingAgentRequests lists incoming agent requests awaiting approval, with the
+// sender's device name resolved best-effort.
+func (c *Client) PendingAgentRequests(ctx context.Context) ([]PendingAgentRequest, error) {
+	reqs, err := c.api.AgentPending(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]string{}
+	if devs, derr := c.api.ListDevices(ctx); derr == nil {
+		for _, d := range devs.Sessions {
+			names[d.ID] = d.DeviceName
+		}
+	}
+	out := make([]PendingAgentRequest, 0, len(reqs))
+	for _, r := range reqs {
+		out = append(out, PendingAgentRequest{
+			ID: r.ID, SenderDeviceID: r.SenderDeviceID, SenderName: names[r.SenderDeviceID],
+			Tool: r.Tool, HasFile: r.HasFile, CreatedAt: r.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+// ApproveAgentRequest approves one incoming request (no standing access). The
+// target device's daemon then delivers it, so this works from any of the
+// account's devices, not only the target.
+func (c *Client) ApproveAgentRequest(ctx context.Context, id string) error {
+	return c.api.AgentApproveOnce(ctx, strings.TrimSpace(id))
+}
+
+// AllowAgentSender grants a sender device standing access, so its future hops
+// deliver without asking.
+func (c *Client) AllowAgentSender(ctx context.Context, senderDeviceID string) error {
+	return c.api.AgentAllow(ctx, strings.TrimSpace(senderDeviceID))
+}
+
 // currentDeviceName is this device's display name for the recipient, best-effort.
 func (c *Client) currentDeviceName(ctx context.Context) string {
 	resp, err := c.api.ListDevices(ctx)
