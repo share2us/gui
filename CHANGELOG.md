@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261006104047] - 2026-10-06
+
 ### Added
 - Send a file to one of your own agents. A new "Your agents" view lists your
   reachable coding-agent sessions. Pick a file, add an optional prompt, and send
