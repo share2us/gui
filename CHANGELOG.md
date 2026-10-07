@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261007112712] - 2026-10-07
+
 ### Added
 
 - When a file/prompt you send to an agent can't be delivered because that agent's
