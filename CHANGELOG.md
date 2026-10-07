@@ -13,6 +13,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+- Maintenance release: refreshed a bundled build dependency (source-map-js). No
+  change to how the app works.
+
 ## [20261006144744] - 2026-10-06
 
 ### Fixed
