@@ -78,7 +78,7 @@ type CloudDevice = { sessionId: string; name: string; label: string; publicKey: 
 type AgentSession = { agentId: string; sessionId: string; deviceId: string; deviceName: string; tool: string; name: string; status: string; lastSeen: string; alias: string; pinned: boolean; hidden: boolean };
 type SendToAgentResult = { requestId: string; status: string; transport: string; busy: boolean };
 type SendToAgentRequest = { agentId: string; sessionId: string; filePath: string; prompt: string; inbox: boolean };
-type AgentStatus = { requestId: string; status: string; result: string };
+type AgentStatus = { requestId: string; status: string; result: string; needsRebind: boolean };
 // An incoming agent hop awaiting this account's approval. createdAt is an ISO
 // string from the API; the prompt stays sealed until it is delivered.
 type PendingAgentRequest = { id: string; senderDeviceId: string; senderName: string; tool: string; hasFile: boolean; createdAt: string };
@@ -927,7 +927,16 @@ async function pollAgentStatus(key: string, requestId: string, inbox: boolean, v
       render();
       return;
     }
-    ui.result = `Sent${via}. ${label[s] || 'Working…'}`;
+    if (st.needsRebind) {
+      // Stuck: the target session can't be verified for live delivery. Surface
+      // the daemon's re-bind instruction as an action; keep polling so it clears
+      // on its own once the user re-binds (no re-send needed).
+      ui.error = st.result || 'This agent is not receiving the prompt: its session needs a re-bind. Run `s2u agent bind <session>` in that session and it delivers automatically.';
+      ui.result = '';
+    } else {
+      ui.result = `Sent${via}. ${label[s] || 'Working…'}`;
+      ui.error = '';
+    }
     render();
   }
 }

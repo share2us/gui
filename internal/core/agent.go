@@ -125,22 +125,34 @@ func (c *Client) SendToAgent(ctx context.Context, agentID, sessionID, filePath, 
 	return SendToAgentResult{RequestID: res.RequestID, Status: res.Status, Transport: res.Transport, Busy: res.Busy}, nil
 }
 
+// agentNeedsRebindMarker MUST match share2us-cli internal/daemon.AgentNeedsRebindMarker.
+// The receiving daemon prefixes a "waiting" result with it when a prompt cannot
+// reach its target session because that session's bound window can no longer be
+// verified; the sender shows a re-bind suggestion.
+const agentNeedsRebindMarker = "S2U_NEEDS_REBIND: "
+
 // AgentStatus is the current state of a sent hop: its status and, once the agent
-// has run, its reply (Result). Empty Result until there is one.
+// has run, its reply (Result). Empty Result until there is one. NeedsRebind is
+// set when the hop is stuck because the target session must be re-bound.
 type AgentStatus struct {
-	RequestID string `json:"requestId"`
-	Status    string `json:"status"`
-	Result    string `json:"result"`
+	RequestID   string `json:"requestId"`
+	Status      string `json:"status"`
+	Result      string `json:"result"`
+	NeedsRebind bool   `json:"needsRebind"`
 }
 
 // AgentStatus polls one sent hop's state, so the app can show pending -> running
-// -> done/failed and the agent's reply.
+// -> done/failed and the agent's reply, and flag when the target needs a re-bind.
 func (c *Client) AgentStatus(ctx context.Context, requestID string) (AgentStatus, error) {
 	st, err := c.api.AgentInjectStatus(ctx, strings.TrimSpace(requestID))
 	if err != nil {
 		return AgentStatus{}, err
 	}
-	return AgentStatus{RequestID: st.ID, Status: st.Status, Result: st.Result}, nil
+	result, needsRebind := st.Result, false
+	if r, ok := strings.CutPrefix(result, agentNeedsRebindMarker); ok {
+		result, needsRebind = r, true
+	}
+	return AgentStatus{RequestID: st.ID, Status: st.Status, Result: result, NeedsRebind: needsRebind}, nil
 }
 
 // ensureSigningKey makes sure this device has a hop signing key and that the
