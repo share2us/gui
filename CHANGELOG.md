@@ -13,6 +13,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- When a file/prompt you send to an agent can't be delivered because that agent's
+  session needs to be re-bound, the send now says so and tells you to re-bind it,
+  instead of appearing to hang. It clears on its own once the session is re-bound.
+
 ## [20261007072225] - 2026-10-07
 
 ### Added
