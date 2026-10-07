@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261007072225] - 2026-10-07
+
 ### Added
 
 - Organise your agents in the "An agent" destination: pin an agent to the top,
