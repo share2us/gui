@@ -1605,6 +1605,36 @@ func (a *App) ListAgents() ([]core.AgentSession, error) {
 	return c.AgentSessions(a.ctx)
 }
 
+// PinAgent pins or unpins an agent so it sorts to the top of the agent list. A
+// local preference shared with the CLI; it never leaves this machine.
+func (a *App) PinAgent(agentID string, pinned bool) error {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return err
+	}
+	return c.PinAgent(agentID, pinned)
+}
+
+// HideAgent hides or unhides an agent from the default list. It stays reachable
+// and still receives sends.
+func (a *App) HideAgent(agentID string, hidden bool) error {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return err
+	}
+	return c.HideAgent(agentID, hidden)
+}
+
+// RenameAgent sets (or clears, with an empty name) a local display name for an
+// agent. Your label only; nobody else sees it.
+func (a *App) RenameAgent(agentID string, name string) error {
+	c, err := a.clientOrErr()
+	if err != nil {
+		return err
+	}
+	return c.RenameAgent(agentID, name)
+}
+
 // SendToAgentRequest is the send-to-agent modal's submit payload.
 type SendToAgentRequest struct {
 	AgentID   string `json:"agentId"`

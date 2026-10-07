@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Organise your agents in the "An agent" destination: pin an agent to the top,
+  hide it into a collapsible section, and rename it with a label only you see.
+  These preferences are local to this computer and shared with the `s2u` CLI;
+  renaming never changes the agent's name for anyone else, and a hidden agent
+  still receives files.
+
 ## [20261007061001] - 2026-10-07
 
 ### Changed

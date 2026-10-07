@@ -22,6 +22,12 @@ type AgentSession struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	LastSeen   string `json:"lastSeen"`
+	// Alias, Pinned and Hidden are this user's LOCAL preferences for the agent
+	// (shared with the CLI via cli-core's config). Alias is a display-name
+	// override that nobody else sees.
+	Alias  string `json:"alias"`
+	Pinned bool   `json:"pinned"`
+	Hidden bool   `json:"hidden"`
 }
 
 // AgentSessions lists the account's reachable agent sessions across the user's
@@ -31,15 +37,37 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Local prefs (alias/pin/hide) decorate each agent; a missing config is fine.
+	config, _ := clicore.LoadConfig()
 	out := make([]AgentSession, 0, len(list))
 	for _, s := range list {
+		p := config.AgentPref(s.AgentID)
 		out = append(out, AgentSession{
 			AgentID: s.AgentID, SessionID: s.SessionID, DeviceID: s.DeviceID,
 			DeviceName: s.DeviceName, Tool: s.Tool, Name: s.Name,
 			Status: s.Status, LastSeen: s.LastSeen,
+			Alias: p.Alias, Pinned: p.Pinned, Hidden: p.Hidden,
 		})
 	}
 	return out, nil
+}
+
+// PinAgent pins (or unpins) an agent so it sorts to the top of agent lists. A
+// local, machine-scoped preference shared with the CLI.
+func (c *Client) PinAgent(agentID string, pinned bool) error {
+	return clicore.UpdateAgentPref(strings.TrimSpace(agentID), func(p *clicore.AgentPrefs) { p.Pinned = pinned })
+}
+
+// HideAgent hides (or unhides) an agent from the default list. It stays reachable
+// and still receives sends; it is only removed from the normal view.
+func (c *Client) HideAgent(agentID string, hidden bool) error {
+	return clicore.UpdateAgentPref(strings.TrimSpace(agentID), func(p *clicore.AgentPrefs) { p.Hidden = hidden })
+}
+
+// RenameAgent sets (or, with an empty alias, clears) a local display name for an
+// agent. It is this user's label only and never changes what anyone else sees.
+func (c *Client) RenameAgent(agentID, alias string) error {
+	return clicore.UpdateAgentPref(strings.TrimSpace(agentID), func(p *clicore.AgentPrefs) { p.Alias = strings.TrimSpace(alias) })
 }
 
 // SendToAgentResult is what the frontend gets back after a send.
