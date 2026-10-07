@@ -75,7 +75,7 @@ type DownloadResult = { name: string; fingerprint: string; from: string; trusted
 // registered an encryption key, and a device without one cannot be sent to.
 type CloudDevice = { sessionId: string; name: string; label: string; publicKey: string; hasKey: boolean; current: boolean; lanFingerprint: string };
 // One of the account's own coding-agent sessions, reachable to send a file to.
-type AgentSession = { agentId: string; sessionId: string; deviceId: string; deviceName: string; tool: string; name: string; status: string; lastSeen: string };
+type AgentSession = { agentId: string; sessionId: string; deviceId: string; deviceName: string; tool: string; name: string; status: string; lastSeen: string; alias: string; pinned: boolean; hidden: boolean };
 type SendToAgentResult = { requestId: string; status: string; transport: string; busy: boolean };
 type SendToAgentRequest = { agentId: string; sessionId: string; filePath: string; prompt: string; inbox: boolean };
 type AgentStatus = { requestId: string; status: string; result: string };
@@ -98,6 +98,9 @@ interface AppBackend {
   ListPendingRequests(): Promise<PendingAgentRequest[]>;
   ApproveAgentRequest(id: string): Promise<void>;
   AllowAgentSender(senderDeviceId: string): Promise<void>;
+  PinAgent(agentId: string, pinned: boolean): Promise<void>;
+  HideAgent(agentId: string, hidden: boolean): Promise<void>;
+  RenameAgent(agentId: string, name: string): Promise<void>;
   BeginLogin(): Promise<LoginInfo>;
   CompleteLogin(): Promise<Status>;
   SetAutostart(on: boolean): Promise<void>;
@@ -209,6 +212,8 @@ const state = {
   pendingError: '' as string, // inline, under the section, so an approve failure does not vanish as a toast
   agentSend: {} as Record<string, AgentSendUI>, // per-agent picked file + prompt + result, keyed by agent id (or session id)
   pickedAgent: '' as string, // which agent is selected in the Share flow's agent destination
+  renameAgent: null as { agentId: string; name: string; serverName: string } | null, // agent rename overlay
+  hiddenAgentsOpen: false as boolean, // the "Hidden agents" dropdown in the agent picker
   recentOpen: (localStorage.getItem('s2u-recent-open') === '1') as boolean, // Recent dropdown; default collapsed
   pickedCloud: [] as { sessionId: string; publicKey: string; name: string; lanFingerprint: string }[],
   // A device send that is about to be uploaded, waiting on the user to accept the
@@ -414,6 +419,7 @@ function renderHome(): void {
     ${state.dl ? downloadOverlay(state.dl) : ''}
     ${state.confirmDrop ? dropConfirmOverlay(state.confirmDrop) : ''}
     ${state.renamePeer ? renamePeerOverlay(state.renamePeer) : ''}
+    ${state.renameAgent ? renameAgentOverlay(state.renameAgent) : ''}
     ${state.shareResult ? shareResultOverlay(state.shareResult) : ''}
     ${shaiPanel()}
     ${statusStrip()}
@@ -535,7 +541,7 @@ function sectionRecent(): string {
     : '';
   // A dropdown so a long activity list never crowds the feed below it. Collapsed
   // by default; the choice is remembered. Matches the .opt-card collapse pattern.
-  return `<details class="sec-collapse"${state.recentOpen ? ' open' : ''}>
+  return `<details class="sec-collapse" id="recent-sec"${state.recentOpen ? ' open' : ''}>
     <summary class="sec-summary"><span class="sec-caret" aria-hidden="true">▸</span><b>Recent</b><span class="sec-count">${all.length}</span></summary>
     <div class="sec-collapse-body">${rows}${more}</div>
   </details>`;
@@ -650,6 +656,7 @@ function renderShare(): void {
       <button class="btn-primary" id="primary-btn" ${canPrimary() ? '' : 'disabled'}>${escapeHtml(primaryLabel())}</button>
     </footer>
     ${state.peerPrompt ? peerConfirmOverlay(state.peerPrompt) : ''}
+    ${state.renameAgent ? renameAgentOverlay(state.renameAgent) : ''}
     ${cloudAskSlot()}
     ${shaiPanel()}
     ${statusStrip()}
@@ -1029,6 +1036,24 @@ function requestOverlay(r: LanRequest): string {
 // it renames the other machine — and the second wrong guess, worse, is that it
 // makes the device trusted. It does neither: the verify code is still what
 // decides whether this is the device you think it is.
+// renameAgentOverlay names an agent with a LOCAL alias (your label only). It does
+// not change the agent's name for anyone else; an empty name clears the alias and
+// falls back to the name the agent reports.
+function renameAgentOverlay(a: { agentId: string; name: string; serverName: string }): string {
+  return `<div class="overlay"><div class="overlay-card">
+    <div class="overlay-title">Rename this agent</div>
+    <div class="overlay-body">
+      <label class="fld">Name
+        <input id="agent-rename-input" type="text" maxlength="64" value="${escapeHtml(a.name)}" placeholder="${escapeHtml(a.serverName || a.agentId)}" autocomplete="off" spellcheck="false"></label>
+      <div class="hint">Only you see this, on this computer and in the CLI. It does not change the agent's name for anyone else. Leave it empty to go back to the name the agent reports.</div>
+    </div>
+    <div class="overlay-actions">
+      <button class="btn-hdr" id="agent-rename-cancel">Cancel</button>
+      <button class="btn-accept" id="agent-rename-save">Save</button>
+    </div>
+  </div></div>`;
+}
+
 function renamePeerOverlay(p: { identity: string; name: string; addr: string }): string {
   return `<div class="overlay"><div class="overlay-card">
     <div class="overlay-title">Name this device</div>
@@ -1254,7 +1279,22 @@ function agentDestBody(): string {
   } else if (!state.agents.length) {
     list = `<div class="hint">No agents yet. Bind a Claude or Codex session with <b>s2u agent bind</b> on any of your devices.</div>`;
   } else {
-    list = state.agents.map(agentPickRow).join('');
+    // Pinned first, then the rest; hidden agents move into a collapsible section
+    // so the picker stays short without losing access to them.
+    const byPinned = (xs: AgentSession[]) =>
+      xs.slice().sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+    const visible = byPinned(state.agents.filter((a) => !a.hidden));
+    const hidden = byPinned(state.agents.filter((a) => a.hidden));
+    const visBody = visible.length
+      ? visible.map(agentPickRow).join('')
+      : `<div class="hint">All your agents are hidden. Open the section below to unhide one.</div>`;
+    const hiddenBody = hidden.length
+      ? `<details class="sec-collapse"${state.hiddenAgentsOpen ? ' open' : ''} id="hidden-agents">
+          <summary>Hidden agents (${hidden.length})</summary>
+          <div class="sec-collapse-body agent-pick-list">${hidden.map(agentPickRow).join('')}</div>
+        </details>`
+      : '';
+    list = visBody + hiddenBody;
   }
   const refresh = `<button class="refresh" id="agents-refresh" aria-label="Look for your agents again" title="Look for your coding-agent sessions again."${state.agentsLoading ? ' disabled' : ''}>↻</button>`;
   const head = `<div class="agent-pick-head"><span style="font-size:12px;color:var(--text-2)">Send this file to one of your agents</span>${refresh}</div>`;
@@ -1277,12 +1317,25 @@ function agentPickRow(a: AgentSession): string {
   const key = a.agentId || a.sessionId;
   const offline = a.status === 'offline';
   const sel = state.pickedAgent === key && !offline;
-  const who = a.name || a.deviceName || a.tool || 'agent';
+  const who = a.alias || a.name || a.deviceName || a.tool || 'agent';
   const meta = [a.tool, a.deviceName, a.status].filter(Boolean).map(escapeHtml).join(' · ');
-  return `<button class="agent-pick-row${sel ? ' sel' : ''}${offline ? ' is-off' : ''}" data-agent="${escapeHtml(key)}"${offline ? ' disabled' : ''} title="${offline ? 'This agent is offline' : 'Select this agent'}">
-    <span class="agent-pick-main"><span class="agent-pick-top"><b>${escapeHtml(who)}</b> <small>${meta}</small></span><small class="agent-row-id">${escapeHtml(key)}</small></span>
-    <span class="agent-pick-go" aria-hidden="true">${sel ? '✓' : '→'}</span>
-  </button>`;
+  // Actions (pin, rename, hide) are per-agent local preferences, keyed by the
+  // stable agent id. Nested buttons are invalid HTML, so the row is a div: a
+  // select button plus an actions cluster. Pin/rename/hide need a real agent id.
+  const hasID = !!a.agentId;
+  const acts = hasID
+    ? `<span class="agent-row-acts">
+        <button class="ib agent-pin${a.pinned ? ' on' : ''}" data-agent="${escapeHtml(a.agentId)}" data-on="${a.pinned ? '1' : '0'}" title="${a.pinned ? 'Unpin' : 'Pin to top'}" aria-label="${a.pinned ? 'Unpin agent' : 'Pin agent'}">${a.pinned ? '★' : '☆'}</button>
+        <button class="ib agent-rename" data-agent="${escapeHtml(a.agentId)}" data-name="${escapeHtml(a.alias)}" data-server="${escapeHtml(a.name)}" title="Rename (your label only)" aria-label="Rename agent">✎</button>
+        <button class="ib agent-hide" data-agent="${escapeHtml(a.agentId)}" data-on="${a.hidden ? '1' : '0'}" title="${a.hidden ? 'Unhide' : 'Hide from the list'}" aria-label="${a.hidden ? 'Unhide agent' : 'Hide agent'}">${a.hidden ? '◡' : '⊘'}</button>
+      </span>`
+    : '';
+  return `<div class="agent-pick-row${sel ? ' sel' : ''}${offline ? ' is-off' : ''}">
+    <button class="agent-pick-sel" data-agent="${escapeHtml(key)}"${offline ? ' disabled' : ''} title="${offline ? 'This agent is offline' : 'Select this agent'}">
+      <span class="agent-pick-main"><span class="agent-pick-top"><b>${escapeHtml(who)}</b> <small>${meta}</small></span><small class="agent-row-id">${escapeHtml(key)}</small></span>
+      <span class="agent-pick-go" aria-hidden="true">${sel ? '✓' : '→'}</span>
+    </button>${acts}
+  </div>`;
 }
 
 // accountDevicesBlock lists the machines signed in to this account, and whether
@@ -1643,6 +1696,25 @@ async function savePeerName() {
     await backend().PeerAlias(p.identity, name);
     await findNearby(true, false);
   } catch (e) { toast(String(e)); }
+}
+
+// Agent local-pref actions. Each writes the shared config (cli-core) and reloads
+// the list so the row, its ordering and the Hidden section all update at once.
+async function togglePinAgent(agentId: string, pinned: boolean): Promise<void> {
+  if (!agentId) return;
+  try { await backend().PinAgent(agentId, !pinned); await loadAgents(); } catch (e) { toast(String(e)); }
+}
+async function toggleHideAgent(agentId: string, hidden: boolean): Promise<void> {
+  if (!agentId) return;
+  try { await backend().HideAgent(agentId, !hidden); await loadAgents(); } catch (e) { toast(String(e)); }
+}
+async function saveAgentName(): Promise<void> {
+  const a = state.renameAgent;
+  if (!a) return;
+  const name = (root.querySelector<HTMLInputElement>('#agent-rename-input')?.value || '').trim();
+  state.renameAgent = null;
+  render();
+  try { await backend().RenameAgent(a.agentId, name); await loadAgents(); } catch (e) { toast(String(e)); }
 }
 
 // Discard a waiting arrival, or drop a filed one from the list.
@@ -2124,10 +2196,36 @@ function wire() {
   // the input never loses focus), restored from state on the next render.
   if (state.view === 'share' && state.dest === 'agent' && state.status?.loggedIn && !state.agentsLoaded && !state.agentsLoading) void loadAgents();
   busyClick('#agents-refresh', (e) => { e.stopPropagation(); return loadAgents(); });
-  on('.agent-pick-row', 'click', (e) => { const key = (e.currentTarget as HTMLElement).dataset.agent || ''; if (key) { state.pickedAgent = key; render(); } });
+  on('.agent-pick-sel', 'click', (e) => { const key = (e.currentTarget as HTMLElement).dataset.agent || ''; if (key) { state.pickedAgent = key; render(); } });
   on('.agent-prompt', 'input', (e) => { const el = e.currentTarget as HTMLInputElement; agentSendUI(el.dataset.agent || '').prompt = el.value; });
+  // Per-agent local prefs: pin to the top, hide from the list, or rename (your
+  // own label). Each change writes the shared config and reloads so the row,
+  // ordering and the Hidden section all reflect it at once.
+  root.querySelectorAll<HTMLElement>('.agent-pin').forEach((el) =>
+    el.addEventListener('click', () => void busyWhile(el, togglePinAgent(el.dataset.agent || '', el.dataset.on === '1'))),
+  );
+  root.querySelectorAll<HTMLElement>('.agent-hide').forEach((el) =>
+    el.addEventListener('click', () => void busyWhile(el, toggleHideAgent(el.dataset.agent || '', el.dataset.on === '1'))),
+  );
+  root.querySelectorAll<HTMLElement>('.agent-rename').forEach((el) =>
+    el.addEventListener('click', () => {
+      const agentId = el.dataset.agent || '';
+      if (!agentId) return;
+      state.renameAgent = { agentId, name: el.dataset.name || '', serverName: el.dataset.server || '' };
+      render();
+      root.querySelector<HTMLInputElement>('#agent-rename-input')?.focus();
+    }),
+  );
+  on('#agent-rename-cancel', 'click', () => { state.renameAgent = null; render(); });
+  busyClick('#agent-rename-save', saveAgentName);
+  root.querySelector('#agent-rename-input')?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') saveAgentName();
+  });
+  root.querySelector<HTMLDetailsElement>('#hidden-agents')?.addEventListener('toggle', (e) => {
+    state.hiddenAgentsOpen = (e.currentTarget as HTMLDetailsElement).open;
+  });
   // Recent is a dropdown: mirror the native toggle into state and remember it.
-  root.querySelector<HTMLDetailsElement>('details.sec-collapse')?.addEventListener('toggle', (e) => {
+  root.querySelector<HTMLDetailsElement>('#recent-sec')?.addEventListener('toggle', (e) => {
     state.recentOpen = (e.currentTarget as HTMLDetailsElement).open;
     try { localStorage.setItem('s2u-recent-open', state.recentOpen ? '1' : '0'); } catch { /* storage may be unavailable */ }
   });
@@ -2232,6 +2330,7 @@ function setupListeners() {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (state.renamePeer) { state.renamePeer = null; render(); return; }
+    if (state.renameAgent) { state.renameAgent = null; render(); return; }
     if (state.confirmDrop) { state.confirmDrop = null; render(); return; }
     if (state.shareResult) { state.shareResult = null; render(); return; }
     if (state.dl) { state.dl = null; render(); return; }

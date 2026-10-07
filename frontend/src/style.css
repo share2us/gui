@@ -2054,10 +2054,15 @@ button.files-add:hover { border-color: var(--accent); color: var(--text-1); }
 /* Share flow "An agent" destination: a selectable agent list. */
 .agent-pick-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .agent-pick-list { display: flex; flex-direction: column; gap: 6px; }
-.agent-pick-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg-1); border-radius: var(--r-md); cursor: pointer; }
-.agent-pick-row:hover:not(:disabled) { border-color: var(--accent); }
+.agent-pick-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg-1); border-radius: var(--r-md); }
+.agent-pick-row:not(.is-off):hover { border-color: var(--accent); }
 .agent-pick-row.sel { border-color: var(--accent); background: var(--bg-2); }
-.agent-pick-row:disabled, .agent-pick-row.is-off { opacity: .55; cursor: default; }
+.agent-pick-row.is-off { opacity: .55; }
+/* The select area is a borderless button filling the row; actions sit beside it. */
+.agent-pick-sel { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; text-align: left; background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; cursor: pointer; }
+.agent-pick-sel:disabled { cursor: default; }
+.agent-row-acts { flex: 0 0 auto; display: flex; align-items: center; gap: 3px; }
+.agent-row-acts .ib { width: 26px; height: 26px; font-size: var(--fs-sm); }
 .agent-pick-main { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .agent-pick-top b { color: var(--text-1); font-weight: 600; }
 .agent-pick-top small { color: var(--text-3); margin-left: 6px; font-size: var(--fs-xs); }
