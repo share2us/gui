@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008121656] - 2026-10-08
+
 ### Added
 
 - Nearby now flags version compatibility before you send. A device too far apart in
