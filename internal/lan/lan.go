@@ -295,7 +295,7 @@ func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer, aliases m
 			Identity:    ident,
 			Addr:        p.Addr(),
 			Address:     p.Host,
-			Dest:        lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
+			Dest:        lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint, IdentityFingerprint: ident}),
 			Code:        lanshare.VerifyCode(firstNonEmpty(ident, p.Fingerprint)),
 			Mode:        p.Mode,
 			Fingerprint: p.Fingerprint,
@@ -317,7 +317,7 @@ func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer, aliases m
 			// identity.
 			Name:         firstNonEmpty(p.Name, p.Host),
 			Addr:         p.Addr(),
-			Dest:         lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint}),
+			Dest:         lanshare.BuildPairingString(p.Host, lanshare.ListenInfo{Port: p.Port, Fingerprint: p.Fingerprint, IdentityFingerprint: p.IdentityFingerprint}),
 			Code:         lanshare.VerifyCode(firstNonEmpty(p.IdentityFingerprint, p.Fingerprint)),
 			Mode:         "",
 			Fingerprint:  p.Fingerprint,

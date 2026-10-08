@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Sending a file over the local network to a device that had restarted no longer
+  fails with "peer certificate fingerprint mismatch (possible MITM)" (or a
+  handshake error). Device codes are now tied to the device's stable identity, so
+  they keep working across restarts; the warning now means a genuine identity
+  change.
+
 ## [20261008094510] - 2026-10-08
 
 ### Added
