@@ -13,6 +13,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Sending a file now returns you to the home screen as soon as the transfer
+  starts, so you see the live progress bar in Transfers. Before, the app stayed on
+  the "Send to <device>" screen for the whole transfer and only dropped you home
+  once it had already finished.
+- The home feed no longer jumps back to the top while a transfer is running, so
+  you can scroll down to Recent during a transfer. The progress bar repaints the
+  feed several times a second, and each repaint had been resetting the scroll.
+
 ## [20261008112423] - 2026-10-08
 
 ### Added
