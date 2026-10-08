@@ -61,6 +61,9 @@ type LanPeer = {
   // Found by probing the subnet rather than by mDNS, so "nearby" may mean "over
   // the tailnet".
   viaScan?: boolean; viaTailscale?: boolean;
+  // appVersion is the Share2Us build stamp the device advertised over mDNS
+  // (cli-core v0.60.0+); empty when it announced none.
+  appVersion?: string;
 };
 type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string; trusted?: boolean };
 type TrustedDevice = { fingerprint: string; name: string; mode: 'ask' | 'auto' };
@@ -556,7 +559,7 @@ function bcastRow(p: LanPeer): string {
   return `<div class="item warn">
     <div class="ico bc">📡</div>
     <div class="line"><b>${escapeHtml(p.name)}</b> · ${escapeHtml(p.fileName)} <span class="meta">${fmtBytes(p.fileSize)}</span></div>
-    <div class="acts"><span class="warn-ic" title="Unverified until you download">⚠</span><button class="ib on dl-btn" data-fp="${escapeHtml(p.fingerprint)}" title="Download">↓</button></div>
+    <div class="acts">${peerVerTag(p)}<span class="warn-ic" title="Unverified until you download">⚠</span><button class="ib on dl-btn" data-fp="${escapeHtml(p.fingerprint)}" title="Download">↓</button></div>
   </div>`;
 }
 
@@ -569,6 +572,16 @@ function peerNamed(p: LanPeer): boolean {
   // name that is really just the address is still recognised as no name.
   const host = p.address || p.addr.replace(/:\d+$/, '');
   return p.name !== host && p.name !== p.addr;
+}
+
+// A small version chip shown beside a peer's action buttons, so the user can see
+// which Share2Us build is on the other end before sending. Rendered only when the
+// device announced one: a CLI/GUI predating v0.60.0, or mDNS being blocked, means
+// no version arrives, and an empty chip would just be noise.
+function peerVerTag(p: LanPeer): string {
+  return p.appVersion
+    ? `<span class="tag ver" title="Share2Us version on this device">v${escapeHtml(p.appVersion)}</span>`
+    : '';
 }
 
 function nearbyRow(p: LanPeer): string {
@@ -596,7 +609,7 @@ function nearbyRow(p: LanPeer): string {
     <div class="line" ${!named && p.viaScan ? 'title="Found by probing the network directly. This device is reachable, but its name did not arrive, which usually means multicast (mDNS) is blocked between you."' : ''}>${label}${
       p.code ? ` <span class="tag code">${escapeHtml(p.code)}</span>` : ''
     }</div>
-    <div class="acts"><button class="ib rename-peer" ${canName ? '' : 'disabled'} data-identity="${escapeHtml(p.identity || '')}" data-name="${escapeHtml(named ? p.name : '')}" data-addr="${escapeHtml(p.addr)}" title="${nameTitle}" aria-label="${nameTitle}">✎</button><button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(named ? p.name : p.addr)}" title="Choose files to send to this device">→</button></div>
+    <div class="acts">${peerVerTag(p)}<button class="ib rename-peer" ${canName ? '' : 'disabled'} data-identity="${escapeHtml(p.identity || '')}" data-name="${escapeHtml(named ? p.name : '')}" data-addr="${escapeHtml(p.addr)}" title="${nameTitle}" aria-label="${nameTitle}">✎</button><button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(named ? p.name : p.addr)}" title="Choose files to send to this device">→</button></div>
   </div>`;
 }
 

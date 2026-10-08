@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/share2us/gui/internal/alias"
@@ -169,6 +170,24 @@ type Peer struct {
 	// ViaTailscale marks a device reached over the tailnet, which is not "nearby"
 	// in any physical sense and should not be described as if it were.
 	ViaTailscale bool `json:"viaTailscale"`
+	// AppVersion is the peer's Share2Us build stamp, advertised over mDNS
+	// (cli-core v0.60.0+); "" when the device did not announce one.
+	AppVersion string `json:"appVersion"`
+}
+
+// appVersion is this device's own build stamp, set once at startup and read in
+// the advert goroutines; stored atomically because those goroutines run
+// concurrently with the main thread that sets it.
+var appVersion atomic.Value // string
+
+// SetAppVersion records this app's build stamp so LAN adverts can announce it.
+// The GUI calls it once with its build version; an empty value just means no
+// version is advertised.
+func SetAppVersion(v string) { appVersion.Store(v) }
+
+func currentAppVersion() string {
+	v, _ := appVersion.Load().(string)
+	return v
 }
 
 // Browse lists nearby Share2Us endpoints — receivers (send targets) and
@@ -302,6 +321,7 @@ func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer, aliases m
 			IsBroadcast: p.IsBroadcast,
 			FileName:    p.FileName,
 			FileSize:    p.FileSize,
+			AppVersion:  p.AppVersion,
 		})
 	}
 	// Add only what mDNS did not already describe: its entry carries the name.
@@ -388,6 +408,7 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 			NoPassword: true, // open listener, but every transfer is user-approved
 			Loop:       true,
 			OnListen: func(info lanshare.ListenInfo) {
+				info.AppVersion = currentAppVersion()
 				if a, aerr := lanshare.Advertise(name, info); aerr == nil {
 					adv = a
 				}
@@ -488,6 +509,7 @@ func StartBroadcast(parent context.Context, path, access string, approve func(Re
 				})
 			},
 			OnListen: func(li lanshare.ListenInfo) {
+				li.AppVersion = currentAppVersion()
 				if a, aerr := lanshare.AdvertiseBroadcast(host, li, name, size); aerr == nil {
 					adv = a
 				}

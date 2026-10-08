@@ -1385,6 +1385,14 @@ select:focus {
   background: var(--accent);
   text-transform: uppercase;
 }
+/* The Share2Us build a peer is running, shown beside its action buttons. Muted:
+   it is reference, not a control, so it must not compete with the buttons. */
+.tag.ver {
+  font-family: var(--font-mono-app);
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text-2) 10%, transparent);
+  align-self: center;
+}
 .empty {
   color: var(--text-2);
   font-size: var(--fs-app-sm);
