@@ -26,6 +26,10 @@ type Prefs struct {
 	// transfers. Off unless the user has said otherwise, and remembered once they
 	// have.
 	Discoverable bool `json:"discoverable"`
+	// AlertsMuted silences the sound + desktop popup on new files and agent
+	// requests. Stored inverted so the zero value (a fresh install) means alerts
+	// are ON, which is what a notification feature should default to.
+	AlertsMuted bool `json:"alerts_muted"`
 }
 
 var mu sync.Mutex
@@ -78,6 +82,27 @@ func SetDiscoverable(on bool) error {
 		_ = json.Unmarshal(raw, &p)
 	}
 	p.Discoverable = on
+	return write(f, p)
+}
+
+// SetAlerts records whether new-file / agent-request alerts (sound + popup) fire.
+func SetAlerts(on bool) error {
+	mu.Lock()
+	defer mu.Unlock()
+	p := Prefs{}
+	f, err := path()
+	if err != nil {
+		return err
+	}
+	if raw, rerr := os.ReadFile(f); rerr == nil {
+		_ = json.Unmarshal(raw, &p)
+	}
+	p.AlertsMuted = !on
+	return write(f, p)
+}
+
+// write persists prefs atomically (temp file + rename). Caller holds mu.
+func write(f string, p Prefs) error {
 	raw, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err

@@ -9,6 +9,7 @@ type Status = {
   shellInstalled: boolean;
   autostartEnabled: boolean;
   discoverable: boolean;
+  alerts: boolean;
 };
 type ShareRequest = {
   paths: string[];
@@ -131,6 +132,9 @@ interface AppBackend {
   NetworkProfile(): Promise<NetProfile>;
   OpenNetworkSettings(): Promise<void>;
   SetDiscoverable(on: boolean): Promise<void>;
+  SetAlerts(on: boolean): Promise<void>;
+  Alert(title: string, body: string): Promise<void>;
+  Beep(): Promise<void>;
   RespondLanRequest(id: string, accept: boolean): Promise<void>;
   RespondCloudFallback(id: string, proceed: boolean): Promise<void>;
   TrustDevice(fingerprint: string, name: string, mode: string): Promise<TrustChallenge>;
@@ -920,6 +924,7 @@ async function pollAgentStatus(key: string, requestId: string, inbox: boolean, v
       if (s === 'done') {
         ui.result = st.result ? `Done. ${st.result}` : (inbox ? 'Delivered.' : 'Done.');
         ui.error = '';
+        try { void backend().Alert('Agent finished', st.result ? st.result.slice(0, 140) : 'Your agent finished its turn.'); } catch { /* */ }
       } else {
         ui.error = st.result || `The agent did not run it (${s}).`;
         ui.result = '';
@@ -1394,6 +1399,7 @@ function settingsBlock(): string {
     <summary class="settings-summary" aria-hidden="true" tabindex="-1">Settings</summary>
     <div class="settings-body">
       <label class="setting-row"><input type="checkbox" id="set-discoverable" ${s.discoverable ? 'checked' : ''} /><span class="setting-label">Discoverable on local network<span class="setting-help">Nearby devices can send you files — trusted ones land automatically, others ask.</span></span></label>
+      <label class="setting-row"><input type="checkbox" id="set-alerts" ${s.alerts ? 'checked' : ''} /><span class="setting-label">Sound + popup alerts<span class="setting-help">Play a sound and show a desktop notification when a file arrives or an agent request needs you.</span></span></label>
       <div class="chk2">Broadcast scan interval <select id="scan-interval">${[15, 30, 60, 120, 0].map((v) => `<option value="${v}" ${state.scanInterval === v ? 'selected' : ''}>${v === 0 ? 'manual only' : 'every ' + v + 's'}</option>`).join('')}</select></div>
       <label class="setting-row"><input type="checkbox" id="set-shell" ${s.shellInstalled ? 'checked' : ''} /><span class="setting-label">Right-click Share menu</span></label>
       <label class="setting-row${s.canReceive ? '' : ' is-disabled'}"><input type="checkbox" id="set-autostart" ${s.autostartEnabled ? 'checked' : ''} ${s.canReceive ? '' : 'disabled'} /><span class="setting-label">Start Share2Us at login<span class="setting-help">So it is already running to receive files. Being found by other devices also needs “Discoverable on local network” above.</span></span></label>
@@ -1755,6 +1761,19 @@ async function refreshPending(show?: boolean) {
   try {
     state.pendingRequests = (await backend().ListPendingRequests()) || [];
     state.pendingError = '';
+    // Alert on a genuinely new request. First load adopts the current set
+    // silently so pre-existing requests do not fire a sound on startup.
+    if (pendingSeen === null) {
+      pendingSeen = new Set(state.pendingRequests.map((r) => r.id));
+    } else {
+      for (const r of state.pendingRequests) {
+        if (!pendingSeen.has(r.id)) {
+          pendingSeen.add(r.id);
+          const who = r.senderName || 'A device';
+          try { void backend().Alert('Agent request', `${who} wants to send to ${r.tool || 'an agent'}`); } catch { /* */ }
+        }
+      }
+    }
   } catch (e) {
     state.pendingError = String(e);
   } finally {
@@ -2242,6 +2261,8 @@ function wire() {
   on('#shai-close', 'click', () => { state.shaiOpen = false; render(); });
   const disc = root.querySelector<HTMLInputElement>('#set-discoverable');
   disc?.addEventListener('change', async () => { try { await backend().SetDiscoverable(disc.checked); if (state.status) state.status.discoverable = disc.checked; if (!disc.checked) { state.discCode = ''; state.discAddr = ''; } render(); } catch { disc.checked = !disc.checked; } });
+  const alerts = root.querySelector<HTMLInputElement>('#set-alerts');
+  alerts?.addEventListener('change', async () => { primeAudio(); try { await backend().SetAlerts(alerts.checked); if (state.status) state.status.alerts = alerts.checked; render(); } catch { alerts.checked = !alerts.checked; } });
   const si = root.querySelector<HTMLSelectElement>('#scan-interval');
   si?.addEventListener('change', async () => { state.scanInterval = Number(si.value); try { await backend().SetScanInterval(state.scanInterval); } catch { /* */ } startScanTimer(); });
   wireToggle('set-shell', (o) => backend().SetShellIntegration(o));
@@ -2329,6 +2350,9 @@ async function pickFiles() {
 let listenersReady = false;
 function setupListeners() {
   if (listenersReady) return; listenersReady = true;
+  // Unlock audio on the first user gesture so the chime can play on later events.
+  document.addEventListener('pointerdown', primeAudio, { once: true });
+  document.addEventListener('keydown', primeAudio, { once: true });
   document.addEventListener('paste', onPaste);
   // Stop the WebView from navigating to (opening) a file dropped outside a Wails
   // drop target — that's what made drops "open like a web browser" and left the
@@ -2364,6 +2388,7 @@ function setupListeners() {
   }, true);
   // Kept: the Go side emits this for the same drop. addPaths dedupes, so the two
   // paths cannot double-add a file.
+  rt?.EventsOn?.('play-chime', () => playChime());
   rt?.EventsOn?.('files-dropped', (paths: string[]) => { addPaths(paths || []); state.view = 'share'; render(); });
   rt?.EventsOn?.('lan-request', (r: any) => {
     if (!r?.id) return;
@@ -2430,6 +2455,31 @@ function pasteFailed(err: unknown) {
 }
 
 // ---- Tiny helpers ----------------------------------------------------------
+
+// --- Notification sound (bundled chime) -------------------------------------
+// A short chime, embedded so it needs no network and works offline. Played in
+// the webview on the Go-side 'play-chime' event; if the webview blocks audio we
+// ask Go to Beep() instead. Primed on the first user gesture so the browser
+// autoplay policy lets it play later.
+const NOTIFY_CHIME = 'data:audio/wav;base64,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';
+let chimeAudio: HTMLAudioElement | null = null;
+let audioPrimed = false;
+function primeAudio() {
+  if (audioPrimed) return;
+  audioPrimed = true;
+  try { chimeAudio = new Audio(NOTIFY_CHIME); } catch { /* audio unavailable */ }
+}
+function playChime() {
+  try {
+    const a = chimeAudio || (chimeAudio = new Audio(NOTIFY_CHIME));
+    a.currentTime = 0;
+    const p = a.play();
+    if (p && typeof p.catch === 'function') p.catch(() => { try { void backend().Beep?.(); } catch { /* */ } });
+  } catch { try { void backend().Beep?.(); } catch { /* */ } }
+}
+// Pending agent-request ids already seen, so only a NEW one alerts (and the
+// first load adopts the current set silently). null until the first refresh.
+let pendingSeen: Set<string> | null = null;
 
 function toast(msg: string) {
   const t = document.createElement('div');

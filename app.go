@@ -276,6 +276,7 @@ type Status struct {
 	ShellInstalled   bool   `json:"shellInstalled"`
 	AutostartEnabled bool   `json:"autostartEnabled"`
 	Discoverable     bool   `json:"discoverable"`
+	Alerts           bool   `json:"alerts"`
 }
 
 // Status reports login and capability state for the UI.
@@ -283,6 +284,7 @@ func (a *App) Status() Status {
 	s := Status{
 		ShellInstalled:   shell.Installed(),
 		AutostartEnabled: autostart.Enabled(),
+		Alerts:           !prefs.Load().AlertsMuted,
 	}
 	a.discMu.Lock()
 	s.Discoverable = a.discoverable
@@ -525,7 +527,7 @@ func (a *App) LanStartReceive() (lan.Listen, error) {
 			wailsRuntime.EventsEmit(a.ctx, "lan-recv-done", map[string]any{
 				"name": res.Name, "path": res.Path, "bytes": res.Bytes, "from": res.From,
 			})
-			_ = beeep.Notify("Share2Us", "Received "+res.Name+" from "+res.From, "")
+			a.alert("Received", res.Name+" from "+res.From)
 		})
 	a.lanMu.Lock()
 	a.lanRecv = r
@@ -776,9 +778,39 @@ func (a *App) arrival(name, from, path string, size int64) {
 	wailsRuntime.EventsEmit(a.ctx, "incoming-changed", nil)
 }
 
-func (a *App) notifyArrival(title, body string) {
+// alert fires the user-facing alert for an event worth surfacing: a desktop
+// popup, plus a "play-chime" event the frontend turns into the bundled sound
+// (falling back to Beep() if the webview cannot play it). Silenced by the
+// AlertsMuted preference, so one gate covers sound + popup everywhere.
+func (a *App) alert(title, body string) {
+	if prefs.Load().AlertsMuted {
+		return
+	}
 	_ = beeep.Notify("Share2Us: "+title, body, "")
+	if a.ctx != nil {
+		wailsRuntime.EventsEmit(a.ctx, "play-chime", nil)
+	}
 }
+
+// Alert is the bound entry point for events the frontend detects itself (a new
+// agent request, an agent reply finishing): same popup + chime as a native one.
+func (a *App) Alert(title, body string) { a.alert(title, body) }
+
+// Beep is the audible fallback the frontend calls when it cannot play the bundled
+// chime (audio blocked in the webview). Honors the same mute preference.
+func (a *App) Beep() {
+	if prefs.Load().AlertsMuted {
+		return
+	}
+	_ = beeep.Beep(beeep.DefaultFreq, beeep.DefaultDuration)
+}
+
+// SetAlerts turns the sound + popup alerts on or off, remembered across restarts.
+func (a *App) SetAlerts(on bool) error { return prefs.SetAlerts(on) }
+
+// notifyArrival surfaces a received/downloaded file; routes through alert so the
+// sound and the mute toggle apply uniformly.
+func (a *App) notifyArrival(title, body string) { a.alert(title, body) }
 
 // IncomingList returns what has arrived and is still waiting to be filed.
 func (a *App) IncomingList() []incoming.Item { return incoming.List() }
@@ -1170,7 +1202,7 @@ func (a *App) LanDownload(addr, fingerprint, name string, size int64) (DownloadR
 		return DownloadResult{}, err
 	}
 	lanid.ActivityAppend(lanid.ActivityEntry{Kind: "downloaded", Peer: res.From, Name: res.Name, Size: size})
-	_ = beeep.Notify("Share2Us", "Downloaded "+res.Name, "")
+	a.alert("Downloaded", res.Name)
 	_, trusted := lanid.Lookup(fp)
 	return DownloadResult{Name: res.Name, Fingerprint: fp, From: res.From, Trusted: trusted}, nil
 }
