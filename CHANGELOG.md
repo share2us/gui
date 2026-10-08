@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008123717] - 2026-10-08
+
 ### Added
 
 - You can now pause, resume, and cancel a transfer from the Transfers section. A
