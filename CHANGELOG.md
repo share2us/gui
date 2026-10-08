@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008094510] - 2026-10-08
+
 ### Added
 
 - Notification alerts: Share2Us now plays a sound and shows a desktop popup when a
