@@ -538,6 +538,15 @@ jobs:
           VERSION: ${{ needs.version.outputs.v }}
         run: |
           set -euo pipefail
+          # Idempotent re-run. A prior attempt of THIS run may have already
+          # created the release and rolled the changelog (e.g. after a flaky smoke
+          # job was re-run). Re-running publish then hit "a release with the same
+          # tag name already exists" and painted a shipped release red. If the
+          # release is already there, there is nothing left to do.
+          if gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::notice::release v${VERSION} already exists; a prior attempt published it. Idempotent re-run, nothing to do."
+            exit 0
+          fi
           ls -laR staging
           # Pass files only (never a directory) so nested artifact layouts can't
           # break the release upload.
