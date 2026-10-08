@@ -13,6 +13,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Notification alerts: Share2Us now plays a sound and shows a desktop popup when a
+  file arrives, when an agent request needs your approval, and when an agent reply
+  finishes. A new "Sound + popup alerts" toggle in Settings turns it off (on by
+  default).
+
 ## [20261008063134] - 2026-10-08
 
 ### Fixed
