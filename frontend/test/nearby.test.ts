@@ -5,6 +5,24 @@ import { mount, click } from './harness';
 const named = { name: 'kestrel', addr: '192.168.15.9:4300', dest: 's2u://192.168.15.9:4300?f=AA', code: '123 456', mode: 'open', fingerprint: 'AA', isBroadcast: false, fileName: '', fileSize: 0 };
 const scanned = { ...named, name: '192.168.15.20', addr: '192.168.15.20:4300', fingerprint: 'BB', dest: 's2u://192.168.15.20:4300?f=BB', viaScan: true };
 
+describe('a nearby device on an incompatible version', () => {
+  it('cannot be sent to, and says to update', async () => {
+    const m = await mount({ LanBrowse: async () => [{ ...named, compat: 'incompatible', appVersion: '20260101000000' }] });
+    expect(m.text()).toContain('update needed');
+    const btn = m.$('.send-to') as HTMLButtonElement;
+    expect(btn?.disabled).toBe(true); // the browser gate: a disabled button cannot be clicked
+  });
+
+  it('a merely-older device is flagged but can still be sent to', async () => {
+    const m = await mount({ LanBrowse: async () => [{ ...named, compat: 'older', appVersion: '20261007000000' }], PickFiles: async () => ['/tmp/a.pdf'] });
+    expect(m.text()).toContain('older');
+    const btn = m.$('.send-to') as HTMLButtonElement;
+    expect(btn?.disabled).toBe(false);
+    await click(m, '.send-to');
+    expect(m.calls.PickFiles?.length).toBe(1);
+  });
+});
+
 describe('a nearby device', () => {
   it('offers to send, and asks which files first', async () => {
     // From Home nothing is chosen yet. This used to call LanSend with an empty

@@ -1393,6 +1393,16 @@ select:focus {
   background: color-mix(in srgb, var(--text-2) 10%, transparent);
   align-self: center;
 }
+/* Version compatibility flags on a nearby device. "update needed" blocks a send
+   (danger); "older" is a non-blocking heads-up (muted warning). */
+.tag.incompat {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.tag.oldver {
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text-2) 10%, transparent);
+}
 .empty {
   color: var(--text-2);
   font-size: var(--fs-app-sm);
