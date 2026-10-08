@@ -62,7 +62,10 @@ func SendOne(ctx context.Context, path, dest, password string, onProgress func(s
 	}
 	defer f.Close()
 
-	opts := lanshare.SendOptions{Dest: dest, Password: password, OnProgress: onProgress}
+	// Resume: declare resume support so an interrupted send (a pause, a receiver
+	// pause, or a dropped link) leaves a partial the receiver can continue from,
+	// and a re-send picks up where it stopped instead of starting over.
+	opts := lanshare.SendOptions{Dest: dest, Password: password, OnProgress: onProgress, Resume: true}
 	// Attach this device's identity so the receiver can recognise / trust it.
 	if id, ierr := lanid.Identity(); ierr == nil {
 		opts.Identity = id
@@ -387,7 +390,7 @@ type Request struct {
 // accepts many transfers over one listener, asks approve() to accept/reject each
 // one, and reports each completed file via onReceived. It returns a handle;
 // Stop (or ctx cancel) tears down the listener and the mDNS advertisement.
-func Serve(parent context.Context, name, destDir string, onListen func(Listen), approve func(Request) bool, onProgress func(name string, received, total int64), onReceived func(Result), onErr func(error)) *Receiver {
+func Serve(parent context.Context, name, destDir string, onListen func(Listen), approve func(Request) bool, onProgress func(name string, received, total int64), onTransferStart func(name string, cancel func(keepPartial bool)), onReceived func(Result), onErr func(error)) *Receiver {
 	ctx, cancel := context.WithCancel(parent)
 	ip := PrimaryIP()
 	go func() {
@@ -438,6 +441,11 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 			OnProgress: func(received, total int64) {
 				if onProgress != nil {
 					onProgress(curName, received, total)
+				}
+			},
+			OnTransferStart: func(info lanshare.RequestInfo, cancel func(keepPartial bool)) {
+				if onTransferStart != nil {
+					onTransferStart(info.Name, cancel)
 				}
 			},
 			OnRequest: func(r lanshare.RequestInfo) bool {

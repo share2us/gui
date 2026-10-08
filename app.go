@@ -81,6 +81,23 @@ type App struct {
 	bcAccess    string                // all | trusted | approve
 	bcActive    map[string]lan.BcConn // downloads in progress, keyed by peer IP
 	bcDone      []lan.BcConn          // completed downloads
+
+	xferMu    sync.Mutex
+	xferSeq   uint64
+	sendXfers map[string]*sendXfer  // active/paused outgoing sends, by transfer id
+	recvXfers map[string]func(bool) // per-incoming-transfer cancel(keepPartial), by id
+}
+
+// sendXfer tracks a controllable outgoing send so the UI can pause, resume, or
+// cancel it. paths holds what is left to send (shrinks as files complete), so a
+// resume continues the batch rather than restarting it. state distinguishes a
+// deliberate pause/cancel from a real failure when the send loop unwinds.
+type sendXfer struct {
+	cancel   context.CancelFunc
+	paths    []string
+	dest     string
+	password string
+	state    string // "" active, "paused", "cancelled"
 }
 
 // Approval anti-spam limits (a peer must not be able to flood the receiver).
@@ -492,7 +509,10 @@ func (p *progressThrottle) ok(done, total int64) bool {
 	return true
 }
 
-// code does not already carry one. Progress is emitted as "lan-send-progress".
+// code does not already carry one. Progress is emitted as "lan-send-progress",
+// each carrying the transfer "id" so the UI can pause/resume/cancel it, and a
+// "lan-send-ended" event per file reports how it finished (done / paused /
+// cancelled / interrupted / failed).
 func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
 	if err := a.chosen.check(paths); err != nil {
 		return failAll(paths, err)
@@ -501,30 +521,157 @@ func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
 	if dest == "" {
 		return failAll(paths, errors.New("enter the receiver's address"))
 	}
+	a.xferMu.Lock()
+	a.xferSeq++
+	id := fmt.Sprintf("send-%d", a.xferSeq)
+	tctx, cancel := context.WithCancel(a.ctx)
+	if a.sendXfers == nil {
+		a.sendXfers = map[string]*sendXfer{}
+	}
+	a.sendXfers[id] = &sendXfer{cancel: cancel, paths: append([]string{}, paths...), dest: dest, password: password}
+	a.xferMu.Unlock()
+	return a.runSend(tctx, id, paths, dest, password)
+}
+
+// runSend sends each path under the transfer's cancellable context, emitting
+// progress and a terminal "lan-send-ended" per file. It is shared by LanSend and
+// ResumeSend. It stops the batch on a pause/cancel (leaving the rest to a resume)
+// and records the still-unsent paths on the registry entry so a resume continues
+// where it stopped.
+func (a *App) runSend(tctx context.Context, id string, paths []string, dest, password string) []ShareOutcome {
 	out := make([]ShareOutcome, 0, len(paths))
-	for _, p := range paths {
+	for i, p := range paths {
 		path := p
+		// Record what is left (this file included) so a resume continues the batch.
+		a.xferMu.Lock()
+		if x := a.sendXfers[id]; x != nil {
+			x.paths = append([]string{}, paths[i:]...)
+		}
+		a.xferMu.Unlock()
+
+		var sent int64
 		pt := &progressThrottle{}
-		err := lan.SendOne(a.ctx, path, dest, password, func(sent, total int64) {
-			if !pt.ok(sent, total) {
+		err := lan.SendOne(tctx, path, dest, password, func(s, total int64) {
+			sent = s
+			if !pt.ok(s, total) {
 				return
 			}
 			wailsRuntime.EventsEmit(a.ctx, "lan-send-progress", map[string]any{
-				"path": path, "name": filepath.Base(path), "sent": sent, "total": total,
+				"id": id, "path": path, "name": filepath.Base(path), "sent": s, "total": total,
 			})
 		})
-		if err != nil {
-			out = append(out, ShareOutcome{Path: path, Error: err.Error()})
-		} else {
+		status := a.classifySend(id, err, sent)
+		wailsRuntime.EventsEmit(a.ctx, "lan-send-ended", map[string]any{
+			"id": id, "path": path, "name": filepath.Base(path), "status": status,
+			"error": errText(err),
+		})
+		if err == nil {
 			out = append(out, ShareOutcome{Path: path, OK: true})
 			var sz int64
 			if fi, serr := os.Stat(path); serr == nil {
 				sz = fi.Size()
 			}
 			lanid.ActivityAppend(lanid.ActivityEntry{Kind: "sent", Name: filepath.Base(path), Size: sz})
+		} else {
+			out = append(out, ShareOutcome{Path: path, Error: err.Error()})
+		}
+		// A deliberate pause/cancel stops the batch; the rest waits for a resume.
+		if status == "paused" || status == "cancelled" {
+			return out
 		}
 	}
+	// Batch finished (or failed outright): drop it from the registry.
+	a.xferMu.Lock()
+	delete(a.sendXfers, id)
+	a.xferMu.Unlock()
 	return out
+}
+
+// classifySend turns a SendOne result into a terminal status, distinguishing a
+// user pause/cancel (registry state) from a genuine failure, and a resumable
+// interruption (bytes moved) from a dead-on-arrival one.
+func (a *App) classifySend(id string, err error, sent int64) string {
+	if err == nil {
+		return "done"
+	}
+	a.xferMu.Lock()
+	state := ""
+	if x := a.sendXfers[id]; x != nil {
+		state = x.state
+	}
+	a.xferMu.Unlock()
+	switch {
+	case state == "paused":
+		return "paused"
+	case state == "cancelled":
+		return "cancelled"
+	case sent > 0:
+		return "interrupted" // link dropped or receiver paused: resumable
+	default:
+		return "failed"
+	}
+}
+
+// PauseSend stops an outgoing transfer but keeps its place: the receiver keeps the
+// partial and ResumeSend continues from there.
+func (a *App) PauseSend(id string) {
+	a.xferMu.Lock()
+	x := a.sendXfers[id]
+	if x != nil {
+		x.state = "paused"
+		x.cancel()
+	}
+	a.xferMu.Unlock()
+}
+
+// CancelSend aborts an outgoing transfer and forgets it.
+func (a *App) CancelSend(id string) {
+	a.xferMu.Lock()
+	x := a.sendXfers[id]
+	if x != nil {
+		x.state = "cancelled"
+		x.cancel()
+	}
+	a.xferMu.Unlock()
+}
+
+// ResumeSend continues a paused outgoing transfer from where it stopped.
+func (a *App) ResumeSend(id string) {
+	a.xferMu.Lock()
+	x := a.sendXfers[id]
+	if x == nil {
+		a.xferMu.Unlock()
+		return
+	}
+	paths, dest, password := append([]string{}, x.paths...), x.dest, x.password
+	tctx, cancel := context.WithCancel(a.ctx)
+	x.cancel = cancel
+	x.state = ""
+	a.xferMu.Unlock()
+	go a.runSend(tctx, id, paths, dest, password)
+}
+
+// PauseIncoming stops an incoming transfer but keeps its partial, so the sender
+// can resume it. CancelIncoming stops it and discards the partial.
+func (a *App) PauseIncoming(id string)  { a.cancelIncoming(id, true) }
+func (a *App) CancelIncoming(id string) { a.cancelIncoming(id, false) }
+
+func (a *App) cancelIncoming(id string, keepPartial bool) {
+	a.xferMu.Lock()
+	cancel := a.recvXfers[id]
+	delete(a.recvXfers, id)
+	a.xferMu.Unlock()
+	if cancel != nil {
+		cancel(keepPartial)
+	}
+}
+
+// errText is the error string, or "" for nil, for event payloads.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // LanStartReceive opens a background receiver and returns the details a sender
@@ -751,10 +898,25 @@ func (a *App) SetDiscoverable(on bool) error {
 				if !spt.ok(rec, total) {
 					return
 				}
-				wailsRuntime.EventsEmit(a.ctx, "lan-recv-progress", map[string]any{"name": fname, "received": rec, "total": total})
+				wailsRuntime.EventsEmit(a.ctx, "lan-recv-progress", map[string]any{"id": "recv:" + fname, "name": fname, "received": rec, "total": total})
 			}
 		}(),
+		func(fname string, cancel func(keepPartial bool)) {
+			// Register this incoming transfer so the UI can pause (keep the partial)
+			// or cancel (discard) it. Keyed to match the progress event's id.
+			id := "recv:" + fname
+			a.xferMu.Lock()
+			if a.recvXfers == nil {
+				a.recvXfers = map[string]func(bool){}
+			}
+			a.recvXfers[id] = cancel
+			a.xferMu.Unlock()
+			wailsRuntime.EventsEmit(a.ctx, "lan-recv-start", map[string]any{"id": id, "name": fname})
+		},
 		func(res lan.Result) {
+			a.xferMu.Lock()
+			delete(a.recvXfers, "recv:"+res.Name) // completed: no longer cancellable
+			a.xferMu.Unlock()
 			lanid.ActivityAppend(lanid.ActivityEntry{Kind: "received", Peer: res.From, Name: res.Name, Size: res.Bytes})
 			a.fileArrival(res)
 		},

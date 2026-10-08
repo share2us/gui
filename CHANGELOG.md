@@ -13,6 +13,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- You can now pause, resume, and cancel a transfer from the Transfers section. A
+  send you are making has Pause (keeps your place), Resume (continues from where it
+  stopped), and Cancel. An incoming transfer has Pause (keeps what has arrived so
+  the sender can resume) and Cancel (discards it). An interrupted send (the link
+  dropped, or the other device paused) is kept with a Resume control instead of
+  being reported as a failure. (cli-core v0.62.0)
+
 ## [20261008121656] - 2026-10-08
 
 ### Added
