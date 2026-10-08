@@ -382,11 +382,15 @@ type Request struct {
 // accepts many transfers over one listener, asks approve() to accept/reject each
 // one, and reports each completed file via onReceived. It returns a handle;
 // Stop (or ctx cancel) tears down the listener and the mDNS advertisement.
-func Serve(parent context.Context, name, destDir string, onListen func(Listen), approve func(Request) bool, onReceived func(Result), onErr func(error)) *Receiver {
+func Serve(parent context.Context, name, destDir string, onListen func(Listen), approve func(Request) bool, onProgress func(name string, received, total int64), onReceived func(Result), onErr func(error)) *Receiver {
 	ctx, cancel := context.WithCancel(parent)
 	ip := PrimaryIP()
 	go func() {
 		var adv io.Closer
+		// The name of the transfer currently arriving, captured at approval so the
+		// progress callback (which only carries bytes) can say which file it is.
+		// Serve takes one transfer at a time, so a single value is enough.
+		var curName string
 		// Publish this device's card: its persistent identity and its name, signed
 		// into the listener's certificate. Without it a peer scanning for us learns
 		// only a per-session certificate fingerprint — no name, and a different
@@ -426,12 +430,21 @@ func Serve(parent context.Context, name, destDir string, onListen func(Listen), 
 					})
 				}
 			},
+			OnProgress: func(received, total int64) {
+				if onProgress != nil {
+					onProgress(curName, received, total)
+				}
+			},
 			OnRequest: func(r lanshare.RequestInfo) bool {
 				fp := lanshare.IdentityFingerprint(r.SenderKey)
-				return approve(Request{
+				ok := approve(Request{
 					From: firstNonEmpty(r.PeerIP, "a nearby device"), Name: r.Name, Size: r.Size, IsDir: r.IsDir,
 					Fingerprint: fp, SenderName: r.SenderName, Code: lanshare.VerifyCode(fp), SafetyNumber: lanshare.SafetyNumber(fp),
 				})
+				if ok {
+					curName = r.Name // so progress for this transfer can name the file
+				}
+				return ok
 			},
 			OnReceived: func(res lanshare.ReceiveResult) {
 				if onReceived != nil {

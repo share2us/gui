@@ -1617,6 +1617,56 @@ select:focus {
   font-weight: 600;
 }
 
+/* Live transfer rows (Transfers section). Built on the shared .item layout
+   (icon · body · actions), but the body stacks a title, a full-width bar, and a
+   stat line. Each part keeps its height so the row does not reflow as the numbers
+   tick (design rule: no layout shift). */
+.item.xfer {
+  align-items: flex-start;
+}
+.item.xfer .ico {
+  margin-top: 1px;
+}
+.xfer-main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+}
+.xfer-top {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xfer .bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.xfer .bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+.xfer .bar.done > span {
+  background: var(--success);
+}
+.xfer-stats {
+  font-variant-numeric: tabular-nums;
+}
+.item.xfer .acts .pct {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+}
+
 /* Download-trust warning line */
 .warn-line {
   font-size: var(--fs-app-sm);

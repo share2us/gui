@@ -13,6 +13,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- A Transfers section on the home screen now shows each file transfer live, in
+  both directions: a progress bar and percentage, the bytes moved out of the
+  total, the current speed, an estimated time remaining, and the elapsed time. A
+  finished transfer shows how long it took, then clears. This covers sending,
+  receiving, and downloading an offered file; receiving over the local network
+  previously showed no progress at all.
+
 ## [20261008105233] - 2026-10-08
 
 ### Added
