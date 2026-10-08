@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008063134] - 2026-10-08
+
 ### Fixed
 
 - Interactive login presents and preserves the device signing identity, allowing
