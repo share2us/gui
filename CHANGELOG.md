@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008105233] - 2026-10-08
+
 ### Added
 
 - Nearby now shows the Share2Us version each device is running, as a small chip
