@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008115327] - 2026-10-08
+
 ### Fixed
 
 - Sending a file now returns you to the home screen as soon as the transfer
