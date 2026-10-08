@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008112423] - 2026-10-08
+
 ### Added
 
 - A Transfers section on the home screen now shows each file transfer live, in
