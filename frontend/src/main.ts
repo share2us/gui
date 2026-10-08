@@ -84,6 +84,13 @@ type Transfer = {
   lastDone: number; // bytes at the last update
   speed: number; // smoothed bytes/sec
   endedAt?: number; // ms when done reached total
+  // state drives the controls: 'active' (pause/cancel), 'paused' (resume/cancel,
+  // bar frozen), 'interrupted' (link dropped or the other side paused; resume/
+  // cancel). A send and a receive can both be controlled; a download cannot.
+  state?: 'active' | 'paused' | 'interrupted';
+  // controllable is which binding set drives this transfer ('send' or 'recv'); ''
+  // for a download, which has no cancel yet. id doubles as the backend control id.
+  controllable?: 'send' | 'recv' | '';
 };
 type TrustedDevice = { fingerprint: string; name: string; mode: 'ask' | 'auto' };
 type TrustChallenge = { challengeId: string; factor: string; sentTo: string; verifyCode: string; safetyNumber: string; expiresIn: number };
@@ -145,6 +152,11 @@ interface AppBackend {
   DiscardIncoming(id: string): Promise<void>;
   SetUpdateChannel(channel: string): Promise<void>;
   LanSend(paths: string[], dest: string, password: string): Promise<ShareOutcome[]>;
+  PauseSend(id: string): Promise<void>;
+  ResumeSend(id: string): Promise<void>;
+  CancelSend(id: string): Promise<void>;
+  PauseIncoming(id: string): Promise<void>;
+  CancelIncoming(id: string): Promise<void>;
   LanBrowse(deep: boolean): Promise<LanPeer[]>;
   LocalAddresses(): Promise<string[]>;
   PeerCheck(name: string, fingerprint: string): Promise<PeerCheck>;
@@ -539,24 +551,43 @@ function sectionTransfers(): string {
 
 function transferRow(t: Transfer): string {
   const pct = t.total > 0 ? Math.min(100, Math.floor((t.done / t.total) * 100)) : 0;
-  const done = !!t.endedAt || (t.total > 0 && t.done >= t.total);
+  const paused = t.state === 'paused' || t.state === 'interrupted';
+  const done = !paused && (!!t.endedAt || (t.total > 0 && t.done >= t.total));
   const elapsed = ((t.endedAt || Date.now()) - t.startedAt) / 1000;
-  const remain = !done && t.speed > 0 && t.total > 0 ? (t.total - t.done) / t.speed : NaN;
+  const remain = !done && !paused && t.speed > 0 && t.total > 0 ? (t.total - t.done) / t.speed : NaN;
   // ↑ sending (this device is the source), ↓ receiving/downloading.
   const arrow = t.dir === 'send' ? '↑' : '↓';
   const verb = t.dir === 'send' ? 'Sending' : t.dir === 'download' ? 'Downloading' : 'Receiving';
   const sizePart = t.total > 0 ? `${fmtBytes(t.done)} / ${fmtBytes(t.total)}` : fmtBytes(t.done);
-  const stats = done
-    ? `done ✓ · ${fmtBytes(t.total || t.done)} in ${fmtDur(elapsed)}`
-    : [sizePart, fmtSpeed(t.speed), `ETA ${fmtDur(remain)}`, fmtDur(elapsed)].join(' · ');
+  let stats: string;
+  if (done) {
+    stats = `done ✓ · ${fmtBytes(t.total || t.done)} in ${fmtDur(elapsed)}`;
+  } else if (paused) {
+    const word = t.state === 'interrupted' ? 'interrupted' : 'paused';
+    const hint = t.dir === 'recv' && t.state === 'paused' ? ' · the sender can resume' : '';
+    stats = `${word} · ${sizePart}${hint}`;
+  } else {
+    stats = [sizePart, fmtSpeed(t.speed), `ETA ${fmtDur(remain)}`, fmtDur(elapsed)].join(' · ');
+  }
+
+  // Controls carry the backend control id (t.id). A send can pause/resume/cancel;
+  // a receive can pause/cancel (resume is sender-driven); a download has none.
+  const id = escapeHtml(t.id);
+  const pauseBtn = `<button class="ib xfer-act" data-xid="${id}" data-act="${t.controllable === 'send' ? 'pause' : 'rpause'}" title="Pause" aria-label="Pause transfer">⏸</button>`;
+  const resumeBtn = `<button class="ib xfer-act" data-xid="${id}" data-act="resume" title="Resume" aria-label="Resume transfer">▶</button>`;
+  const cancelBtn = `<button class="ib xfer-act" data-xid="${id}" data-act="${t.controllable === 'send' ? 'cancel' : 'rcancel'}" title="Cancel" aria-label="Cancel transfer">✕</button>`;
+  let btns = '';
+  if (!done && t.controllable === 'send') btns = (paused ? resumeBtn : pauseBtn) + cancelBtn;
+  else if (!done && t.controllable === 'recv') btns = (paused ? '' : pauseBtn) + cancelBtn;
+
   return `<div class="item xfer">
     <div class="ico ${t.dir === 'send' ? 'out' : 'rx'}">${arrow}</div>
     <div class="line xfer-main">
       <div class="xfer-top"><b>${escapeHtml(t.name)}</b> <span class="meta">· ${verb}</span></div>
-      <span class="bar${done ? ' done' : ''}"><span style="width:${pct}%"></span></span>
+      <span class="bar${done ? ' done' : ''}${paused ? ' paused' : ''}"><span style="width:${pct}%"></span></span>
       <div class="xfer-stats meta">${escapeHtml(stats)}</div>
     </div>
-    <div class="acts"><span class="pct">${pct}%</span></div>
+    <div class="acts">${btns}<span class="pct">${pct}%</span></div>
   </div>`;
 }
 
@@ -2114,6 +2145,22 @@ function wire() {
     state.view = 'share';
     render();
   });
+  // Transfer controls (Transfers section): pause / resume / cancel, both sides.
+  on('.xfer-act', 'click', (e) => {
+    const el = (e.currentTarget as HTMLElement);
+    const id = el.getAttribute('data-xid') || '';
+    const act = el.getAttribute('data-act') || '';
+    const t = state.transfers[id];
+    const b = backend() as any;
+    switch (act) {
+      case 'pause': b.PauseSend?.(id); if (t) t.state = 'paused'; break;
+      case 'resume': b.ResumeSend?.(id); if (t) t.state = 'active'; break;
+      case 'cancel': b.CancelSend?.(id); delete state.transfers[id]; break;
+      case 'rpause': b.PauseIncoming?.(id); if (t) t.state = 'paused'; break;
+      case 'rcancel': b.CancelIncoming?.(id); delete state.transfers[id]; break;
+    }
+    render();
+  });
   on('.dl-btn', 'click', async (e) => {
     const fp = (e.currentTarget as HTMLElement).dataset.fp;
     const p = state.peers.find((x) => x.isBroadcast && x.fingerprint === fp);
@@ -2512,11 +2559,17 @@ function setupListeners() {
   // Live transfer progress, both directions. The backend throttles these to a
   // dozen a second per transfer; upsertTransfer coalesces the repaint.
   rt?.EventsOn?.('lan-send-progress', (d: any) => {
-    const id = 'send:' + String(d?.path ?? d?.name ?? '');
-    upsertTransfer(id, 'send', String(d?.name || basename(String(d?.path || ''))) || 'file', Number(d?.sent) || 0, Number(d?.total) || 0);
+    const id = String(d?.id || 'send:' + String(d?.path ?? d?.name ?? ''));
+    upsertTransfer(id, 'send', String(d?.name || basename(String(d?.path || ''))) || 'file', Number(d?.sent) || 0, Number(d?.total) || 0, 'send');
   });
+  rt?.EventsOn?.('lan-send-ended', (d: any) => endTransfer(String(d?.id || ''), String(d?.status || ''), String(d?.error || '')));
   rt?.EventsOn?.('lan-recv-progress', (d: any) => {
-    upsertTransfer('recv', 'recv', String(d?.name || '') || 'Incoming file', Number(d?.received) || 0, Number(d?.total) || 0);
+    const id = String(d?.id || 'recv');
+    upsertTransfer(id, 'recv', String(d?.name || '') || 'Incoming file', Number(d?.received) || 0, Number(d?.total) || 0, 'recv');
+  });
+  rt?.EventsOn?.('lan-recv-start', (d: any) => {
+    const id = String(d?.id || '');
+    if (id) upsertTransfer(id, 'recv', String(d?.name || 'Incoming file'), 0, 0, 'recv');
   });
   rt?.EventsOn?.('lan-dl-progress', (d: any) => {
     const name = String(d?.name || 'file');
@@ -2637,7 +2690,7 @@ function fmtSpeed(bps: number): string {
 // run per event) because events outrun the eye; those frequent events also keep
 // elapsed/ETA advancing, so no always-on ticker is needed. A one-shot timer per
 // transfer clears a finished row (after a brief linger) or a stalled one.
-function upsertTransfer(id: string, dir: Transfer['dir'], name: string, done: number, total: number): void {
+function upsertTransfer(id: string, dir: Transfer['dir'], name: string, done: number, total: number, controllable: Transfer['controllable'] = ''): void {
   const now = Date.now();
   let t = state.transfers[id];
   if (!t) {
@@ -2646,6 +2699,8 @@ function upsertTransfer(id: string, dir: Transfer['dir'], name: string, done: nu
   }
   if (name) t.name = name;
   if (total > 0) t.total = total;
+  if (controllable) t.controllable = controllable;
+  t.state = 'active'; // bytes are moving
   const dt = (now - t.lastAt) / 1000;
   if (dt > 0 && done > t.lastDone) {
     const inst = (done - t.lastDone) / dt;
@@ -2676,6 +2731,9 @@ function armTransferCleanup(id: string): void {
   if (transferTimers[id]) clearTimeout(transferTimers[id]);
   const t = state.transfers[id];
   if (!t) return;
+  // A paused/interrupted transfer is deliberately kept until the user resumes or
+  // cancels it, so it gets no auto-cleanup timer.
+  if (t.state === 'paused' || t.state === 'interrupted') return;
   const delay = t.endedAt ? 3000 : 30000;
   transferTimers[id] = window.setTimeout(() => {
     delete transferTimers[id];
@@ -2683,6 +2741,38 @@ function armTransferCleanup(id: string): void {
     if (state.view === 'home') render();
   }, delay);
 }
+// endTransfer applies a terminal "lan-send-ended" status to a send row: done ->
+// linger then clear; paused/interrupted -> keep with a resume control; cancelled
+// -> remove; failed -> remove and surface the error.
+function endTransfer(id: string, status: string, error: string): void {
+  const t = state.transfers[id];
+  if (!t) return;
+  switch (status) {
+    case 'done':
+      t.done = t.total || t.done;
+      t.endedAt = Date.now();
+      t.state = 'active';
+      armTransferCleanup(id);
+      break;
+    case 'paused':
+      t.state = 'paused';
+      armTransferCleanup(id);
+      break;
+    case 'interrupted':
+      t.state = 'interrupted';
+      armTransferCleanup(id);
+      break;
+    case 'cancelled':
+      delete state.transfers[id];
+      break;
+    default: // 'failed' or unknown
+      delete state.transfers[id];
+      if (error) toast(error);
+      break;
+  }
+  scheduleTransferRender();
+}
+
 // Mark a transfer finished immediately (e.g. on a done event), so it does not wait
 // for a byte frame that never comes, then arm its short cleanup.
 function finishTransfers(dir: Transfer['dir']): void {

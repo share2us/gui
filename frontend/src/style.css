@@ -1667,6 +1667,11 @@ select:focus {
 .xfer .bar.done > span {
   background: var(--success);
 }
+/* A paused/interrupted transfer: amber, and no fill animation (it is frozen). */
+.xfer .bar.paused > span {
+  background: var(--warning, #d9a406);
+  transition: none;
+}
 .xfer-stats {
   font-variant-numeric: tabular-nums;
 }
