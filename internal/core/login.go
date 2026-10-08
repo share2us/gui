@@ -16,6 +16,7 @@ import (
 // the user code and verification URL for the UI to show/open; Wait then blocks
 // until the user approves in the browser. Ported from the CLI's login().
 type LoginSession struct {
+	signingKey      clicore.SigningKeyPair
 	apiBase         string
 	deviceCode      string
 	interval        int
@@ -37,17 +38,23 @@ func StartLogin(ctx context.Context, deviceName string) (*LoginSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	signingKey, err := clicore.PrepareLoginSigningKey()
+	if err != nil {
+		return nil, err
+	}
 	code, err := client.StartDeviceCode(ctx, clicore.DeviceCodeRequest{
-		DeviceName:    device.DeviceName,
-		MachineID:     device.MachineID,
-		OS:            device.OS,
-		Arch:          device.Arch,
-		ClientVersion: clicore.FullVersion(),
+		SigningPublicKey: signingKey.PublicKey,
+		DeviceName:       device.DeviceName,
+		MachineID:        device.MachineID,
+		OS:               device.OS,
+		Arch:             device.Arch,
+		ClientVersion:    clicore.FullVersion(),
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &LoginSession{
+		signingKey:      signingKey,
 		apiBase:         apiBase,
 		deviceCode:      code.DeviceCode,
 		interval:        code.Interval,
@@ -97,12 +104,15 @@ func (s *LoginSession) Wait(ctx context.Context) (*Client, error) {
 			email = me.UserID
 		}
 		cred := clicore.Credential{
-			APIBase:          s.apiBase,
-			Token:            token.Credential,
-			Email:            email,
-			DeviceSessionID:  token.DeviceSessionID,
-			DevicePublicKey:  keyPair.PublicKey,
-			DevicePrivateKey: keyPair.PrivateKey,
+			DeviceSigningPublicKey:  s.signingKey.PublicKey,
+			DeviceSigningPrivateKey: s.signingKey.PrivateKey,
+			AccountID:               me.AccountID,
+			APIBase:                 s.apiBase,
+			Token:                   token.Credential,
+			Email:                   email,
+			DeviceSessionID:         token.DeviceSessionID,
+			DevicePublicKey:         keyPair.PublicKey,
+			DevicePrivateKey:        keyPair.PrivateKey,
 		}
 		if err := clicore.SaveCredential(cred); err != nil {
 			return nil, err

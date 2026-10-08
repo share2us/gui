@@ -13,6 +13,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Interactive login presents and preserves the device signing identity, allowing
+  recovery of a lost signing key without removing the device (updated API required).
+
 ## [20261007112712] - 2026-10-07
 
 ### Added
