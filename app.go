@@ -464,6 +464,34 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 // LanSend streams each path directly to a nearby receiver over the local network
 // (no account, end-to-end encrypted). dest is the receiver's code (an s2u://
 // pairing string) or a plain host / host:port; password is used only when the
+// progressThrottle limits how often a transfer's progress reaches the UI.
+// lanshare calls OnProgress on every read (thousands of times for a large file),
+// which would flood the Wails event bridge; this caps emits to ~12/sec per
+// transfer while always letting the final (done==total) frame through so the bar
+// still reaches 100%. A drop in `done` means a new transfer began (Serve reuses
+// one callback across transfers), which forces the next frame out immediately.
+type progressThrottle struct {
+	last     time.Time
+	lastDone int64
+}
+
+func (p *progressThrottle) ok(done, total int64) bool {
+	now := time.Now()
+	if done < p.lastDone {
+		p.last = time.Time{} // new transfer: do not throttle its first frame
+	}
+	p.lastDone = done
+	if total > 0 && done >= total {
+		p.last = now
+		return true
+	}
+	if now.Sub(p.last) < 80*time.Millisecond {
+		return false
+	}
+	p.last = now
+	return true
+}
+
 // code does not already carry one. Progress is emitted as "lan-send-progress".
 func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
 	if err := a.chosen.check(paths); err != nil {
@@ -476,9 +504,13 @@ func (a *App) LanSend(paths []string, dest, password string) []ShareOutcome {
 	out := make([]ShareOutcome, 0, len(paths))
 	for _, p := range paths {
 		path := p
+		pt := &progressThrottle{}
 		err := lan.SendOne(a.ctx, path, dest, password, func(sent, total int64) {
+			if !pt.ok(sent, total) {
+				return
+			}
 			wailsRuntime.EventsEmit(a.ctx, "lan-send-progress", map[string]any{
-				"path": path, "sent": sent, "total": total,
+				"path": path, "name": filepath.Base(path), "sent": sent, "total": total,
 			})
 		})
 		if err != nil {
@@ -508,6 +540,7 @@ func (a *App) LanStartReceive() (lan.Listen, error) {
 
 	ready := make(chan lan.Listen, 1)
 	errc := make(chan error, 1)
+	rpt := &progressThrottle{}
 	r := lan.StartReceive(a.ctx, stageDir(),
 		func(l lan.Listen) {
 			select {
@@ -516,6 +549,9 @@ func (a *App) LanStartReceive() (lan.Listen, error) {
 			}
 		},
 		func(rec, total int64) {
+			if !rpt.ok(rec, total) {
+				return
+			}
 			wailsRuntime.EventsEmit(a.ctx, "lan-recv-progress", map[string]any{"received": rec, "total": total})
 		},
 		func(res *lan.Result, err error) {
@@ -709,6 +745,15 @@ func (a *App) SetDiscoverable(on bool) error {
 			wailsRuntime.EventsEmit(a.ctx, "lan-discoverable", map[string]any{"address": l.Address, "name": name, "code": l.Code, "safety": lanid.SafetyNumber()})
 		},
 		a.approveRequest,
+		func() func(string, int64, int64) {
+			spt := &progressThrottle{}
+			return func(fname string, rec, total int64) {
+				if !spt.ok(rec, total) {
+					return
+				}
+				wailsRuntime.EventsEmit(a.ctx, "lan-recv-progress", map[string]any{"name": fname, "received": rec, "total": total})
+			}
+		}(),
 		func(res lan.Result) {
 			lanid.ActivityAppend(lanid.ActivityEntry{Kind: "received", Peer: res.From, Name: res.Name, Size: res.Bytes})
 			a.fileArrival(res)
@@ -1197,8 +1242,12 @@ type DownloadResult struct {
 // LanDownload pulls a broadcast file (addr + cert fingerprint from the nearby
 // list) into Downloads, resuming if it was interrupted before.
 func (a *App) LanDownload(addr, fingerprint, name string, size int64) (DownloadResult, error) {
+	dpt := &progressThrottle{}
 	res, fp, err := lan.Download(a.ctx, addr, fingerprint, name, size, receiver.DownloadsDir(),
 		func(recv, total int64) {
+			if !dpt.ok(recv, total) {
+				return
+			}
 			wailsRuntime.EventsEmit(a.ctx, "lan-dl-progress", map[string]any{"name": name, "received": recv, "total": total})
 		})
 	if err != nil {

@@ -66,6 +66,21 @@ type LanPeer = {
   appVersion?: string;
 };
 type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string; trusted?: boolean };
+// An in-flight (or just-finished) LAN transfer, shown in the Transfers section
+// with a live bar, speed, and ETA. speed is a smoothed bytes/sec; endedAt is set
+// once done reaches total (the row lingers briefly, then clears).
+type Transfer = {
+  id: string;
+  dir: 'send' | 'recv' | 'download';
+  name: string;
+  done: number;
+  total: number;
+  startedAt: number; // ms
+  lastAt: number; // ms of the last update
+  lastDone: number; // bytes at the last update
+  speed: number; // smoothed bytes/sec
+  endedAt?: number; // ms when done reached total
+};
 type TrustedDevice = { fingerprint: string; name: string; mode: 'ask' | 'auto' };
 type TrustChallenge = { challengeId: string; factor: string; sentTo: string; verifyCode: string; safetyNumber: string; expiresIn: number };
 type TrustPrompt = TrustChallenge & { fingerprint: string; name: string; mode: string; error: string; busy: boolean };
@@ -198,6 +213,10 @@ const state = {
   picked: null as { dest: string; name: string } | null,
   scanInterval: 60 as number,
   buildVersion: '' as string,
+  // Active LAN transfers (both directions), keyed by a stable id. Shown in the
+  // Transfers section with a bar, speed, and ETA while they run; a finished one
+  // lingers a moment, then clears (the Recent section keeps the lasting record).
+  transfers: {} as Record<string, Transfer>,
   // share modal
   dest: 'nearby' as Dest,
   // Which half of the send flow is showing. Derived from dest so the two can
@@ -416,7 +435,7 @@ function renderHome(): void {
     ${loginProgress()}
     <div class="home">
       <button class="share-cta" id="open-share"><span class="plus">+</span> Share a file</button>
-      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionAgentRequests()}${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
+      <div class="feed-scroll">${state.feedLoading ? feedSkeleton() : `${sectionAgentRequests()}${sectionTransfers()}${sectionNearby()}${sectionIncoming()}${sectionRecent()}`}</div>
       ${settingsBlock()}
     </div>
     ${cloudAskSlot()}
@@ -493,6 +512,39 @@ function sectionAgentRequests(): string {
   }
   const rows = state.pendingRequests.map(agentRequestRow).join('');
   return `<div class="sec-head"><b>Agent requests</b><span class="meta">waiting for your approval</span></div>${rows}${err}`;
+}
+
+// Live transfers, both directions, newest first. Rendered only while something is
+// in flight (or just finished): an always-present empty section would reserve a
+// band of nothing. Each row keeps a fixed shape (bar + stat line) so it does not
+// reflow as the numbers tick (design rule: no layout shift).
+function sectionTransfers(): string {
+  const items = Object.values(state.transfers).sort((a, b) => b.startedAt - a.startedAt);
+  if (!items.length) return '';
+  return `<div class="sec-head"><b>Transfers</b><span class="meta">in progress</span></div>${items.map(transferRow).join('')}`;
+}
+
+function transferRow(t: Transfer): string {
+  const pct = t.total > 0 ? Math.min(100, Math.floor((t.done / t.total) * 100)) : 0;
+  const done = !!t.endedAt || (t.total > 0 && t.done >= t.total);
+  const elapsed = ((t.endedAt || Date.now()) - t.startedAt) / 1000;
+  const remain = !done && t.speed > 0 && t.total > 0 ? (t.total - t.done) / t.speed : NaN;
+  // ↑ sending (this device is the source), ↓ receiving/downloading.
+  const arrow = t.dir === 'send' ? '↑' : '↓';
+  const verb = t.dir === 'send' ? 'Sending' : t.dir === 'download' ? 'Downloading' : 'Receiving';
+  const sizePart = t.total > 0 ? `${fmtBytes(t.done)} / ${fmtBytes(t.total)}` : fmtBytes(t.done);
+  const stats = done
+    ? `done ✓ · ${fmtBytes(t.total || t.done)} in ${fmtDur(elapsed)}`
+    : [sizePart, fmtSpeed(t.speed), `ETA ${fmtDur(remain)}`, fmtDur(elapsed)].join(' · ');
+  return `<div class="item xfer">
+    <div class="ico ${t.dir === 'send' ? 'out' : 'rx'}">${arrow}</div>
+    <div class="line xfer-main">
+      <div class="xfer-top"><b>${escapeHtml(t.name)}</b> <span class="meta">· ${verb}</span></div>
+      <span class="bar${done ? ' done' : ''}"><span style="width:${pct}%"></span></span>
+      <div class="xfer-stats meta">${escapeHtml(stats)}</div>
+    </div>
+    <div class="acts"><span class="pct">${pct}%</span></div>
+  </div>`;
 }
 
 function sectionIncoming(): string {
@@ -2418,7 +2470,20 @@ function setupListeners() {
     };
     render();
   });
-  rt?.EventsOn?.('lan-recv-done', () => { refreshActivity().then(render); });
+  // Live transfer progress, both directions. The backend throttles these to a
+  // dozen a second per transfer; upsertTransfer coalesces the repaint.
+  rt?.EventsOn?.('lan-send-progress', (d: any) => {
+    const id = 'send:' + String(d?.path ?? d?.name ?? '');
+    upsertTransfer(id, 'send', String(d?.name || basename(String(d?.path || ''))) || 'file', Number(d?.sent) || 0, Number(d?.total) || 0);
+  });
+  rt?.EventsOn?.('lan-recv-progress', (d: any) => {
+    upsertTransfer('recv', 'recv', String(d?.name || '') || 'Incoming file', Number(d?.received) || 0, Number(d?.total) || 0);
+  });
+  rt?.EventsOn?.('lan-dl-progress', (d: any) => {
+    const name = String(d?.name || 'file');
+    upsertTransfer('dl:' + name, 'download', name, Number(d?.received) || 0, Number(d?.total) || 0);
+  });
+  rt?.EventsOn?.('lan-recv-done', () => { finishTransfers('recv'); refreshActivity().then(render); });
   rt?.EventsOn?.('incoming-changed', () => { refreshIncoming().then(render); });
   rt?.EventsOn?.('incoming-arrived', (d: any) => { queueSavePrompt(String(d?.id || '')); });
   rt?.EventsOn?.('lan-discoverable', (d: any) => { if (!d?.error) { state.discCode = String(d?.code || ''); state.discSafety = String(d?.safety || ''); state.discAddr = String(d?.address || ''); render(); } });
@@ -2514,6 +2579,80 @@ function ago(ts: number): string {
   if (s < 3600) return Math.floor(s / 60) + 'm ago';
   if (s < 86400) return Math.floor(s / 3600) + 'h ago';
   return Math.floor(s / 86400) + 'd ago';
+}
+// mm:ss, or h:mm:ss past an hour. Used for both elapsed and ETA.
+function fmtDur(seconds: number): string {
+  if (!isFinite(seconds) || seconds < 0) return '--:--';
+  const t = Math.round(seconds);
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+function fmtSpeed(bps: number): string {
+  if (!isFinite(bps) || bps <= 0) return '0 B/s';
+  return `${fmtBytes(bps)}/s`;
+}
+
+// upsertTransfer folds one progress event into state.transfers, keeping a smoothed
+// speed so the figure does not jump with every burst. Renders are coalesced (not
+// run per event) because events outrun the eye; those frequent events also keep
+// elapsed/ETA advancing, so no always-on ticker is needed. A one-shot timer per
+// transfer clears a finished row (after a brief linger) or a stalled one.
+function upsertTransfer(id: string, dir: Transfer['dir'], name: string, done: number, total: number): void {
+  const now = Date.now();
+  let t = state.transfers[id];
+  if (!t) {
+    t = { id, dir, name, done: 0, total, startedAt: now, lastAt: now, lastDone: 0, speed: 0 };
+    state.transfers[id] = t;
+  }
+  if (name) t.name = name;
+  if (total > 0) t.total = total;
+  const dt = (now - t.lastAt) / 1000;
+  if (dt > 0 && done > t.lastDone) {
+    const inst = (done - t.lastDone) / dt;
+    t.speed = t.speed > 0 ? 0.3 * inst + 0.7 * t.speed : inst;
+  }
+  t.lastAt = now;
+  t.lastDone = done;
+  t.done = done;
+  if (t.total > 0 && done >= t.total && !t.endedAt) t.endedAt = now;
+  armTransferCleanup(id);
+  scheduleTransferRender();
+}
+
+const transferTimers: Record<string, number> = {};
+let transferRenderPending = false;
+// Coalesce renders: progress events outrun the display, so repaint at most ~8/sec.
+function scheduleTransferRender(): void {
+  if (transferRenderPending) return;
+  transferRenderPending = true;
+  setTimeout(() => { transferRenderPending = false; if (state.view === 'home') render(); }, 120);
+}
+// (Re)arm the single timer that clears this transfer: a finished row lingers ~3s
+// so the done state is seen; an unfinished one that stops updating (a failed or
+// abandoned transfer) clears after 30s. Re-armed on every event, so an active
+// transfer never clears itself; one-shot, so nothing keeps ticking in the
+// background once transfers are idle.
+function armTransferCleanup(id: string): void {
+  if (transferTimers[id]) clearTimeout(transferTimers[id]);
+  const t = state.transfers[id];
+  if (!t) return;
+  const delay = t.endedAt ? 3000 : 30000;
+  transferTimers[id] = window.setTimeout(() => {
+    delete transferTimers[id];
+    delete state.transfers[id];
+    if (state.view === 'home') render();
+  }, delay);
+}
+// Mark a transfer finished immediately (e.g. on a done event), so it does not wait
+// for a byte frame that never comes, then arm its short cleanup.
+function finishTransfers(dir: Transfer['dir']): void {
+  const now = Date.now();
+  for (const id of Object.keys(state.transfers)) {
+    const t = state.transfers[id];
+    if (t.dir === dir && !t.endedAt) { t.done = t.total || t.done; t.endedAt = now; armTransferCleanup(id); }
+  }
+  scheduleTransferRender();
 }
 function copy(text: string) { const rt = (window as any).runtime; if (rt?.ClipboardSetText) rt.ClipboardSetText(text); else navigator.clipboard?.writeText(text).catch(() => {}); }
 function basename(p: string): string { const parts = p.split(/[\\/]/); return parts[parts.length - 1] || p; }
