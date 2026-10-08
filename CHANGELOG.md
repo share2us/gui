@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Nearby now shows the Share2Us version each device is running, as a small chip
+  beside its action buttons, so you can see which build is on the other end
+  before sending (and spot a device that is behind). Devices announce their
+  version over the local network; one running an older build that does not
+  announce it simply shows no chip. (cli-core v0.60.0)
+
 ## [20261008100920] - 2026-10-08
 
 ### Fixed

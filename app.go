@@ -102,6 +102,9 @@ func NewApp(pending []string) *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// Announce this build's version on every LAN advert, so a peer can see which
+	// version is on the other end before sending.
+	lan.SetAppVersion(buildVersion)
 	// Native file drop: forward dropped file paths to the modal.
 	wailsRuntime.OnFileDrop(ctx, func(_, _ int, paths []string) {
 		if len(paths) > 0 {
