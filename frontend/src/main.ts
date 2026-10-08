@@ -64,6 +64,10 @@ type LanPeer = {
   // appVersion is the Share2Us build stamp the device advertised over mDNS
   // (cli-core v0.60.0+); empty when it announced none.
   appVersion?: string;
+  // compat is how our version relates to this peer's: 'ok', 'older' (compatible
+  // but the peer is behind us), 'incompatible' (too far apart to transfer), or
+  // 'unknown'. We warn on 'older' and block sending on 'incompatible'.
+  compat?: string;
 };
 type LanRequest = { id: string; from: string; name: string; size: number; fingerprint: string; senderName: string; code: string; action: string; trusted?: boolean };
 // An in-flight (or just-finished) LAN transfer, shown in the Transfers section
@@ -665,12 +669,24 @@ function nearbyRow(p: LanPeer): string {
   const nameTitle = canName
     ? (p.aliased ? 'Change the name you gave this device' : 'Give this device a name of your own')
     : 'This device has not proved a stable identity, so a name could not stay attached to it';
+  // Compatibility: block a send to a device too far apart in version to transfer
+  // reliably, and flag (without blocking) one that is merely behind us.
+  const incompatible = p.compat === 'incompatible';
+  const older = p.compat === 'older';
+  const compatBadge = incompatible
+    ? `<span class="tag incompat" title="This device is on an incompatible Share2Us version. Update both devices to the same version to transfer.">update needed</span>`
+    : older
+    ? `<span class="tag oldver" title="This device is on an older Share2Us version than yours. Sending should still work; update it if a transfer misbehaves.">older</span>`
+    : '';
+  const sendTitle = incompatible
+    ? 'Cannot send: this device is on an incompatible Share2Us version. Update both devices to the same version.'
+    : 'Choose files to send to this device';
   return `<div class="item">
     <div class="ico rx">📡</div>
     <div class="line" ${!named && p.viaScan ? 'title="Found by probing the network directly. This device is reachable, but its name did not arrive, which usually means multicast (mDNS) is blocked between you."' : ''}>${label}${
       p.code ? ` <span class="tag code">${escapeHtml(p.code)}</span>` : ''
-    }</div>
-    <div class="acts">${peerVerTag(p)}<button class="ib rename-peer" ${canName ? '' : 'disabled'} data-identity="${escapeHtml(p.identity || '')}" data-name="${escapeHtml(named ? p.name : '')}" data-addr="${escapeHtml(p.addr)}" title="${nameTitle}" aria-label="${nameTitle}">✎</button><button class="ib on send-to" data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(named ? p.name : p.addr)}" title="Choose files to send to this device">→</button></div>
+    }${compatBadge}</div>
+    <div class="acts">${peerVerTag(p)}<button class="ib rename-peer" ${canName ? '' : 'disabled'} data-identity="${escapeHtml(p.identity || '')}" data-name="${escapeHtml(named ? p.name : '')}" data-addr="${escapeHtml(p.addr)}" title="${nameTitle}" aria-label="${nameTitle}">✎</button><button class="ib on send-to" ${incompatible ? 'disabled' : ''} data-dest="${escapeHtml(p.dest)}" data-name="${escapeHtml(named ? p.name : p.addr)}" title="${sendTitle}">→</button></div>
   </div>`;
 }
 
@@ -1606,6 +1622,13 @@ async function sendToChecked(dest: string, name: string, fingerprint: string) {
 async function sendTo(dest: string) {
   const paths = state.paths.slice();
   if (!paths.length) return;
+  // Defence in depth: the row's send button is already disabled for an
+  // incompatible peer, but never start a transfer that cannot complete.
+  const peer = state.peers.find((p) => p.dest === dest);
+  if (peer?.compat === 'incompatible') {
+    toast('That device is on an incompatible Share2Us version. Update both to the same version.');
+    return;
+  }
   // Return to Home right away so the Transfers section shows the live bar while
   // the file moves. LanSend blocks for the whole transfer, so awaiting it before
   // switching views kept the user on the "Send to <name>" screen the entire time

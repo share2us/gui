@@ -173,6 +173,10 @@ type Peer struct {
 	// AppVersion is the peer's Share2Us build stamp, advertised over mDNS
 	// (cli-core v0.60.0+); "" when the device did not announce one.
 	AppVersion string `json:"appVersion"`
+	// Compat is how this device's version relates to the peer's: "ok", "older"
+	// (compatible, peer is behind), "incompatible" (block the send), or "unknown"
+	// (no version to judge by). The UI warns on "older" and blocks "incompatible".
+	Compat string `json:"compat"`
 }
 
 // appVersion is this device's own build stamp, set once at startup and read in
@@ -322,6 +326,7 @@ func mergePeers(found []lanshare.Peer, scanned []lanshare.ScannedPeer, aliases m
 			FileName:    p.FileName,
 			FileSize:    p.FileSize,
 			AppVersion:  p.AppVersion,
+			Compat:      string(lanshare.CompatWith(currentAppVersion(), p.AppVersion, p.MinPeer)),
 		})
 	}
 	// Add only what mDNS did not already describe: its entry carries the name.

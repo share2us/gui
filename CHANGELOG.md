@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Nearby now flags version compatibility before you send. A device too far apart in
+  version to transfer reliably is marked "update needed" and its send button is
+  disabled (with an explanation); one that is merely on an older version than yours
+  is marked "older" but can still be sent to. Based on the minimum-compatible
+  version each device advertises (cli-core v0.61.0).
+
 ## [20261008115327] - 2026-10-08
 
 ### Fixed
