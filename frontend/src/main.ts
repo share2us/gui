@@ -429,6 +429,11 @@ function buildStrip(): string {
 }
 
 function renderHome(): void {
+  // Preserve the feed's scroll position across the full innerHTML replacement.
+  // Progress events repaint the home view several times a second, and without
+  // this each repaint reset the feed to the top, so during a transfer the user
+  // could not scroll down to Recent: it snapped back up repeatedly.
+  const prevScroll = root.querySelector('.feed-scroll')?.scrollTop ?? 0;
   root.innerHTML = `<div class="modal">
     ${header()}
     ${updatePanel()}
@@ -451,6 +456,10 @@ function renderHome(): void {
     ${statusStrip()}
     ${buildStrip()}
   </div>`;
+  if (prevScroll > 0) {
+    const fs = root.querySelector('.feed-scroll');
+    if (fs) fs.scrollTop = prevScroll;
+  }
   wire();
 }
 
@@ -1595,13 +1604,20 @@ async function sendToChecked(dest: string, name: string, fingerprint: string) {
 }
 
 async function sendTo(dest: string) {
-  const outcomes = await backend().LanSend(state.paths, dest, '').catch((e) => [{ path: '', ok: false, error: String(e) } as ShareOutcome]);
-  // No outcomes means nothing was attempted. every() on an empty array is true,
-  // which is how a send of nothing used to report success.
-  const ok = outcomes.length > 0 && outcomes.every((o) => o.ok);
+  const paths = state.paths.slice();
+  if (!paths.length) return;
+  // Return to Home right away so the Transfers section shows the live bar while
+  // the file moves. LanSend blocks for the whole transfer, so awaiting it before
+  // switching views kept the user on the "Send to <name>" screen the entire time
+  // and only dropped them home once it was already finished.
   state.view = 'home';
   state.paths = [];
   state.picked = null;
+  render();
+  const outcomes = await backend().LanSend(paths, dest, '').catch((e) => [{ path: '', ok: false, error: String(e) } as ShareOutcome]);
+  // No outcomes means nothing was attempted. every() on an empty array is true,
+  // which is how a send of nothing used to report success.
+  const ok = outcomes.length > 0 && outcomes.every((o) => o.ok);
   await refreshActivity();
   render();
   if (!ok) toast(outcomes.find((o) => !o.ok)?.error || 'Send failed');
