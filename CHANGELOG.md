@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008100920] - 2026-10-08
+
 ### Fixed
 
 - Sending a file over the local network to a device that had restarted no longer
