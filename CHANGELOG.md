@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Pausing or cancelling a transfer now takes effect reliably, including on a large
+  file and after a resume. Previously a pause/cancel issued while the sender was
+  hashing a multi-GB file (which happens before sending, and again on resume) was
+  ignored until the whole file had been read, so the transfer appeared to "keep
+  going". (cli-core v0.63.0)
+
 ## [20261008123717] - 2026-10-08
 
 ### Added

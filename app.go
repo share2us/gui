@@ -86,6 +86,10 @@ type App struct {
 	xferSeq   uint64
 	sendXfers map[string]*sendXfer  // active/paused outgoing sends, by transfer id
 	recvXfers map[string]func(bool) // per-incoming-transfer cancel(keepPartial), by id
+
+	// emit, when set (tests), replaces wailsRuntime.EventsEmit so the transfer
+	// state machine can be exercised without a live Wails frontend.
+	emit func(event string, data map[string]any)
 }
 
 // sendXfer tracks a controllable outgoing send so the UI can pause, resume, or
@@ -481,6 +485,19 @@ func (a *App) shareOne(c *core.Client, req ShareRequest, path string) ShareOutco
 // LanSend streams each path directly to a nearby receiver over the local network
 // (no account, end-to-end encrypted). dest is the receiver's code (an s2u://
 // pairing string) or a plain host / host:port; password is used only when the
+// sendOneFn is the LAN send, indirected so tests can drive the pause/resume/cancel
+// state machine without a real transfer.
+var sendOneFn = lan.SendOne
+
+// emitEvent posts a Wails event, or routes through a.emit when a test installed one.
+func (a *App) emitEvent(event string, data map[string]any) {
+	if a.emit != nil {
+		a.emit(event, data)
+		return
+	}
+	wailsRuntime.EventsEmit(a.ctx, event, data)
+}
+
 // progressThrottle limits how often a transfer's progress reaches the UI.
 // lanshare calls OnProgress on every read (thousands of times for a large file),
 // which would flood the Wails event bridge; this caps emits to ~12/sec per
@@ -551,17 +568,17 @@ func (a *App) runSend(tctx context.Context, id string, paths []string, dest, pas
 
 		var sent int64
 		pt := &progressThrottle{}
-		err := lan.SendOne(tctx, path, dest, password, func(s, total int64) {
+		err := sendOneFn(tctx, path, dest, password, func(s, total int64) {
 			sent = s
 			if !pt.ok(s, total) {
 				return
 			}
-			wailsRuntime.EventsEmit(a.ctx, "lan-send-progress", map[string]any{
+			a.emitEvent("lan-send-progress", map[string]any{
 				"id": id, "path": path, "name": filepath.Base(path), "sent": s, "total": total,
 			})
 		})
 		status := a.classifySend(id, err, sent)
-		wailsRuntime.EventsEmit(a.ctx, "lan-send-ended", map[string]any{
+		a.emitEvent("lan-send-ended", map[string]any{
 			"id": id, "path": path, "name": filepath.Base(path), "status": status,
 			"error": errText(err),
 		})
@@ -575,8 +592,15 @@ func (a *App) runSend(tctx context.Context, id string, paths []string, dest, pas
 		} else {
 			out = append(out, ShareOutcome{Path: path, Error: err.Error()})
 		}
-		// A deliberate pause/cancel stops the batch; the rest waits for a resume.
-		if status == "paused" || status == "cancelled" {
+		// A cancel ends the transfer: drop it so a late control is a no-op and the
+		// registry does not leak. A pause keeps the entry so a resume can find it.
+		if status == "cancelled" {
+			a.xferMu.Lock()
+			delete(a.sendXfers, id)
+			a.xferMu.Unlock()
+			return out
+		}
+		if status == "paused" {
 			return out
 		}
 	}
