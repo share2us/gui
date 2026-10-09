@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261009070806] - 2026-10-09
+
 ### Fixed
 
 - Pausing or cancelling a transfer now takes effect reliably, including on a large
