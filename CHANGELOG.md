@@ -13,6 +13,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- On a plan that doesn't include the agent bridge (the free tier), the "An agent" share
+  destination no longer shows a "not available on this plan" error. It now shows a quiet,
+  informational note that sending files to your coding agents is available on Pro and Max.
+
 ## [20261009070806] - 2026-10-09
 
 ### Fixed
