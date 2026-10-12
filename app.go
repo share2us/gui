@@ -1872,7 +1872,18 @@ func (a *App) ListAgents() ([]core.AgentSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.AgentSessions(a.ctx)
+	sessions, err := c.AgentSessions(a.ctx)
+	if err != nil {
+		// On a plan without the agent bridge (the free tier), don't surface a scary
+		// "not available" error — return a quiet, informational note instead, which the
+		// UI shows as a plain muted hint rather than an error.
+		var apiErr *clicore.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "agent_bridge_not_allowed" {
+			return nil, errors.New("Sending files to your coding agents is available on Pro and Max.")
+		}
+		return nil, err
+	}
+	return sessions, nil
 }
 
 // PinAgent pins or unpins an agent so it sorts to the top of the agent list. A
