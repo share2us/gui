@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261012174712] - 2026-10-12
+
 ### Changed
 
 - On a plan that doesn't include the agent bridge (the free tier), the "An agent" share
