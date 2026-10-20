@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261020113242] - 2026-10-20
+
 ### Fixed
 
 - Windows: logging out now works. The app could get stuck showing your username
