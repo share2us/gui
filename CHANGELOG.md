@@ -13,6 +13,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows: logging out now works. The app could get stuck showing your username
+  while every action failed as "not authenticated" — logout deleted the current
+  credential but a pre-2026-07 copy under `%USERPROFILE%\.config` was left behind
+  and silently restored the stale login. (cli-core v0.68.0)
+
 ## [20261012174712] - 2026-10-12
 
 ### Changed
