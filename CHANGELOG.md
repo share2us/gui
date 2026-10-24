@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Security
+
+- Rebuilt on Go 1.26 (1.26.10) to pick up the October 2026 Go `crypto/x509`
+  fix (CVE-2026-111943): a forged certificate chain built on a blocklisted
+  intermediate CA could be accepted when the app verifies a TLS server. Also
+  refreshed bundled build dependencies (klauspost/compress, vite) to their
+  October security releases.
+
 ## [20261020113242] - 2026-10-20
 
 ### Fixed
