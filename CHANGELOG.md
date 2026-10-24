@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261024180008] - 2026-10-24
+
 ### Security
 
 - Rebuilt on Go 1.26 (1.26.10) to pick up the October 2026 Go `crypto/x509`
