@@ -13,6 +13,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261102070928] - 2026-11-02
+
 ### Fixed
 
 - An expired or server-revoked sign-in now shows a clear "Session expired — sign
