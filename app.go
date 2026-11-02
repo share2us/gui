@@ -294,6 +294,7 @@ func (a *App) clientOrErr() (*core.Client, error) {
 // Status is what the modal asks for first: what can this session do right now?
 type Status struct {
 	LoggedIn         bool   `json:"loggedIn"`
+	HasCredential    bool   `json:"hasCredential"`
 	Email            string `json:"email"`
 	IsAPIToken       bool   `json:"isApiToken"`
 	CanReceive       bool   `json:"canReceive"`
@@ -313,6 +314,10 @@ func (a *App) Status() Status {
 	a.discMu.Lock()
 	s.Discoverable = a.discoverable
 	a.discMu.Unlock()
+	// Independent of LoggedIn: a credential may exist on disk yet be unusable or
+	// server-revoked. The UI keeps "Log out" available whenever one is present so
+	// a broken login can always be cleared (see core.CredentialPresent).
+	s.HasCredential = core.CredentialPresent()
 	c, err := a.clientOrErr()
 	if err != nil {
 		return s

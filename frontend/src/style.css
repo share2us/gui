@@ -356,6 +356,38 @@ body {
   color: var(--danger);
   font-size: var(--fs-app-sm);
 }
+/* Session-expired bar: fixed to the top so it never reflows the view beneath it
+   (design rule: no layout shift). Spans the window; clears when the session is
+   restored or dismissed. */
+.session-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--danger);
+  color: var(--text-1);
+  font-size: var(--fs-app-sm);
+  box-shadow: var(--shadow-md);
+}
+.session-banner .sb-msg { flex: 1 1 auto; }
+.session-banner .sb-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+.session-banner .sb-x {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: var(--fs-app-lg);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.session-banner .sb-x:hover { color: var(--text-1); }
 .btn-mini {
   background: var(--accent);
   color: var(--on-accent);

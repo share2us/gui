@@ -3,6 +3,7 @@ import './style.css';
 // Backend is window.go.main.App (Wails). Types mirror app.go.
 type Status = {
   loggedIn: boolean;
+  hasCredential: boolean;
   email: string;
   isApiToken: boolean;
   canReceive: boolean;
@@ -265,6 +266,12 @@ const state = {
   loginPhase: 'idle' as 'idle' | 'waiting' | 'error',
   loginInfo: null as LoginInfo | null,
   loginError: '' as string,
+  // Set when an API call comes back unauthorized: the saved credential was
+  // rejected or the session was revoked server-side. The app still "looks"
+  // signed in (loggedIn reads the local file, not the server), so this drives a
+  // persistent "session expired, sign in again" banner — the actionable recovery
+  // the raw "unauthorized" error never offered.
+  sessionExpired: false as boolean,
   // download confirm overlay
   dl: null as (LanPeer & { trust?: boolean; check?: PeerCheck }) | null,
   // cloud share result (persistent copyable link)
@@ -318,6 +325,7 @@ async function boot() {
 }
 
 function render(): void {
+  renderSessionBanner();
   if (state.view === 'share') return renderShare();
   if (state.view === 'broadcast') return renderBroadcast();
   return renderHome();
@@ -942,8 +950,10 @@ async function loadCloudDevices(): Promise<void> {
   render();
   try {
     state.cloudDevices = (await backend().ListDevices()) || [];
+    state.sessionExpired = false;
   } catch (e) {
     state.cloudDevicesError = String(e);
+    noteError(e);
   } finally {
     state.cloudDevicesLoading = false;
     render();
@@ -958,8 +968,10 @@ async function loadAgents(): Promise<void> {
   try {
     state.agents = (await backend().ListAgents()) || [];
     state.agentsLoaded = true;
+    state.sessionExpired = false;
   } catch (e) {
     state.agentsError = String(e);
+    noteError(e);
   } finally {
     state.agentsLoading = false;
     render();
@@ -1538,8 +1550,8 @@ function settingsBlock(): string {
         </span>
       </div>
       <div class="setting-row" style="justify-content:space-between">
-        <span class="setting-label">${s.loggedIn ? `Signed in as ${escapeHtml(s.email)}` : 'Not signed in'}</span>
-        <button class="btn-hdr" id="logout-btn" ${s.loggedIn ? '' : 'disabled'}>Log out</button>
+        <span class="setting-label">${s.loggedIn ? `Signed in as ${escapeHtml(s.email)}` : (s.hasCredential ? 'Signed-in credential is present but not working' : 'Not signed in')}</span>
+        <button class="btn-hdr" id="logout-btn" ${s.loggedIn || s.hasCredential ? '' : 'disabled'}>Log out</button>
       </div>
     </div>
   </details>`;
@@ -1896,6 +1908,7 @@ async function refreshPending(show?: boolean) {
   try {
     state.pendingRequests = (await backend().ListPendingRequests()) || [];
     state.pendingError = '';
+    state.sessionExpired = false;
     // Alert on a genuinely new request. First load adopts the current set
     // silently so pre-existing requests do not fire a sound on startup.
     if (pendingSeen === null) {
@@ -1911,6 +1924,7 @@ async function refreshPending(show?: boolean) {
     }
   } catch (e) {
     state.pendingError = String(e);
+    noteError(e);
   } finally {
     state.pendingLoading = false;
     if (state.view === 'home') render();
@@ -2448,6 +2462,58 @@ async function respondRequest(accept: boolean) {
 function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
   return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
 }
+
+// isAuthError recognizes the backend's 401 signatures: the API's
+// "unauthorized: authentication is required" and core's "not logged in". The
+// password-gate 401 ("download password is required") deliberately does not
+// match — it is a per-download prompt, not a dead session.
+function isAuthError(e: unknown): boolean {
+  return /\bunauthorized\b|authentication is required|\bnot logged in\b/i.test(String(e));
+}
+
+// noteError flips the session-expired banner on when a caught error is an auth
+// failure. Call it from the catch of any authenticated backend call; it is a
+// no-op for every other error, so it is always safe to add.
+function noteError(e: unknown): void {
+  if (isAuthError(e) && !state.sessionExpired) {
+    state.sessionExpired = true;
+    renderSessionBanner();
+  }
+}
+
+// The session-expired banner lives on document.body, not inside #app: it is
+// position:fixed so it never reflows the view under it (design rule: no layout
+// shift), and it survives each view's innerHTML replacement. render() calls this
+// every paint so it appears/updates/clears in lockstep with state.sessionExpired.
+function renderSessionBanner(): void {
+  let el = document.getElementById('session-banner');
+  if (!state.sessionExpired) {
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'session-banner';
+    document.body.appendChild(el);
+  }
+  el.className = 'session-banner';
+  el.innerHTML = `<span class="sb-msg">Your session has expired — please sign in again.</span>`
+    + `<span class="sb-actions"><button class="btn-mini" id="sb-reauth">Sign in again</button>`
+    + `<button class="sb-x" id="sb-dismiss" aria-label="Dismiss">×</button></span>`;
+  el.querySelector('#sb-reauth')?.addEventListener('click', () => void reauth());
+  el.querySelector('#sb-dismiss')?.addEventListener('click', () => { state.sessionExpired = false; renderSessionBanner(); });
+}
+
+// reauth clears the rejected credential, then starts a fresh sign-in. Clearing
+// first means the new login replaces a known-bad credential rather than layering
+// on top of it; signIn() repaints and, on success, drops the banner.
+async function reauth(): Promise<void> {
+  state.sessionExpired = false;
+  renderSessionBanner();
+  try { await backend().Logout(); } catch { /* best effort — we are about to replace it */ }
+  await signIn();
+}
+
 async function signIn() {
   state.loginPhase = 'waiting'; state.loginError = ''; state.loginInfo = null; render();
   try {
@@ -2457,13 +2523,14 @@ async function signIn() {
     state.loginInfo = await withTimeout(backend().BeginLogin(), 20000, 'Could not reach the sign-in server. Check your connection and try again.');
     render();
     state.status = await backend().CompleteLogin();
-    state.loginPhase = 'idle'; state.loginInfo = null; render();
+    state.loginPhase = 'idle'; state.loginInfo = null; state.sessionExpired = false; render();
   } catch (e) { state.loginPhase = 'error'; state.loginError = String(e).replace(/^Error:\s*/, ''); state.loginInfo = null; render(); }
 }
 async function logout() {
   let err: unknown = null;
   try { await backend().Logout(); } catch (e) { err = e; }
   try { state.status = await backend().Status(); } catch { /* */ }
+  state.sessionExpired = false;
   state.view = 'home'; render();
   if (err) toast('Logout failed: ' + String(err));
   else if (state.status?.loggedIn) toast('Could not clear the session — please try again');
