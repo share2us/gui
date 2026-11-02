@@ -13,6 +13,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- An expired or server-revoked sign-in now shows a clear "Session expired — sign
+  in again" banner with a one-click fix, instead of leaving the app stuck showing
+  repeated "unauthorized: authentication is required" errors with no obvious way
+  to recover. "Log out" also stays available whenever a saved login is present,
+  so a broken credential can always be cleared.
+
 ## [20261024180008] - 2026-10-24
 
 ### Security

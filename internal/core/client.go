@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	clicore "github.com/share2us/cli-core"
 )
@@ -48,6 +49,23 @@ func Load() (*Client, error) {
 // Logout deletes the saved credential (the shared cli-core store), signing out
 // of both the app and the CLI on this machine.
 func Logout() error { return clicore.DeleteCredential() }
+
+// CredentialPresent reports whether a credential file exists on disk, regardless
+// of whether it still loads into a usable client or is accepted by the server.
+// Load()/Status() report LoggedIn from the file alone and never check with the
+// server, so a credential the server has revoked still shows as "signed in"
+// while every call 401s. The UI uses this to keep "Log out" (which clears the
+// local credential) available even then — otherwise a stale login is impossible
+// to clear from the app, the exact trap this is here to avoid.
+func CredentialPresent() bool {
+	cred, err := clicore.LoadCredential()
+	if err == nil {
+		return cred.Token != ""
+	}
+	// A read/parse error (anything other than "no file") means a credential file
+	// is there but unusable — still something the user should be able to clear.
+	return !errors.Is(err, os.ErrNotExist)
+}
 
 // Email is the logged-in account's email.
 func (c *Client) Email() string { return c.cred.Email }
